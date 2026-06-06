@@ -1,0 +1,5 @@
+{
+  "buildCommand": "npm run build -w apps/web",
+  "installCommand": "npm install",
+  "framework": "nextjs"
+}

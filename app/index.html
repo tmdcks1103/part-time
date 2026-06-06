@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>근무표 빌더</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">제2생활관 조교 근무표</p>
+        <h1>월간 근무표 빌더</h1>
+      </div>
+      <div class="topbar-actions">
+        <label class="file-button">
+          <span>불러오기</span>
+          <input id="importJson" type="file" accept="application/json">
+        </label>
+        <button id="exportJson" type="button">JSON</button>
+        <button id="exportCsv" type="button">CSV</button>
+        <button id="generate" class="primary" type="button">생성</button>
+      </div>
+    </header>
+
+    <section id="metrics" class="metrics" aria-live="polite"></section>
+
+    <section class="workspace">
+      <aside class="control-panel">
+        <section class="panel-section">
+          <div class="section-title">
+            <h2>월 설정</h2>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>근무월</span>
+              <input id="monthInput" type="month">
+            </label>
+            <label>
+              <span>시간 편차</span>
+              <input id="toleranceInput" type="number" min="0" step="1">
+            </label>
+            <label>
+              <span>시도 횟수</span>
+              <input id="attemptsInput" type="number" min="100" step="100">
+            </label>
+            <label>
+              <span>시드</span>
+              <input id="seedInput" type="number" step="1">
+            </label>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-title">
+            <h2>근무 시간대</h2>
+          </div>
+          <div id="shiftTemplates" class="template-list"></div>
+        </section>
+
+        <section class="panel-section assistants-section">
+          <div class="section-title">
+            <h2>조교</h2>
+            <button id="addAssistant" type="button" class="small-button">추가</button>
+          </div>
+          <div id="assistantList" class="assistant-list"></div>
+        </section>
+      </aside>
+
+      <section class="schedule-panel">
+        <div class="schedule-toolbar">
+          <div>
+            <h2 id="scheduleTitle">근무표</h2>
+            <p id="scheduleStatus"></p>
+          </div>
+          <div class="segmented" role="group" aria-label="보기">
+            <button id="viewSchedule" class="active" type="button">표</button>
+            <button id="viewPeople" type="button">조교별</button>
+          </div>
+        </div>
+        <div id="scheduleView" class="schedule-view"></div>
+        <div id="peopleView" class="people-view hidden"></div>
+      </section>
+
+      <aside class="detail-panel">
+        <section class="panel-section">
+          <div class="section-title">
+            <h2>조교 상세</h2>
+          </div>
+          <div id="assistantEditor"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-title">
+            <h2>근무 조정</h2>
+          </div>
+          <div id="shiftInspector" class="shift-inspector muted-box">근무 칸을 선택하세요.</div>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="./app.js"></script>
+</body>
+</html>

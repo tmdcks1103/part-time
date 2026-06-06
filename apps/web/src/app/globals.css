@@ -1,0 +1,410 @@
+:root {
+  --bg: #f4f6f7;
+  --surface: #ffffff;
+  --surface-soft: #eef3f4;
+  --line: #d8dee2;
+  --line-strong: #b9c4cb;
+  --text: #1d252b;
+  --muted: #63737e;
+  --brand: #176b87;
+  --brand-strong: #0d4f68;
+  --accent: #c8643d;
+  --ok: #2e7d5b;
+  --bad: #b33a3a;
+  --shadow: 0 18px 48px rgba(24, 38, 45, 0.11);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 1180px;
+  margin: 0;
+  color: var(--text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 246, 247, 0.94)),
+    repeating-linear-gradient(90deg, rgba(23, 107, 135, 0.04) 0 1px, transparent 1px 72px);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+select,
+input {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+}
+
+button {
+  min-height: 36px;
+  padding: 0 12px;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+  box-shadow: 0 8px 22px rgba(24, 38, 45, 0.08);
+}
+
+button:disabled,
+input:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+input,
+select {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+}
+
+label span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 28px;
+}
+
+h2 {
+  font-size: 15px;
+}
+
+h3 {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.product-shell {
+  padding: 22px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.eyebrow {
+  margin-bottom: 4px;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.topbarControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbarControls select {
+  width: 190px;
+}
+
+.primary {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--brand-strong);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.metric {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 8px 24px rgba(24, 38, 45, 0.05);
+  padding: 13px 14px;
+}
+
+.metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.metric strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 24px;
+}
+
+.tone-ok {
+  color: var(--ok);
+}
+
+.tone-bad {
+  color: var(--bad);
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 290px minmax(600px, 1fr) 340px;
+  gap: 14px;
+  align-items: start;
+}
+
+.panel {
+  min-height: calc(100vh - 150px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.93);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.leftPanel,
+.rightPanel {
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+}
+
+.panelBlock {
+  border-bottom: 1px solid var(--line);
+  padding: 14px;
+}
+
+.panelBlock:last-child {
+  border-bottom: 0;
+}
+
+.blockTitle,
+.scheduleHeader,
+.miniTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.blockTitle {
+  margin-bottom: 12px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.assistantList,
+.versionList,
+.editorStack,
+.miniRows,
+.shiftInspector {
+  display: grid;
+  gap: 8px;
+}
+
+.assistantItem {
+  width: 100%;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.assistantItem.active {
+  border-color: var(--brand);
+  background: rgba(23, 107, 135, 0.09);
+}
+
+.assistantItem small,
+.versionItem span,
+.scheduleHeader p,
+.shiftInspector span,
+.candidate small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.assistantItem b {
+  color: var(--brand);
+}
+
+.versionItem {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.scheduleHeader {
+  border-bottom: 1px solid var(--line);
+  padding: 14px;
+}
+
+.rolePill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: #fff;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.rolePill.manager {
+  border-color: rgba(23, 107, 135, 0.35);
+  color: var(--brand);
+  background: rgba(23, 107, 135, 0.08);
+}
+
+.tableScroller {
+  max-height: calc(100vh - 218px);
+  overflow: auto;
+  padding: 14px;
+}
+
+.scheduleTable {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.scheduleTable th,
+.scheduleTable td {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 0;
+  vertical-align: top;
+}
+
+.scheduleTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #edf3f5;
+  padding: 9px 10px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.scheduleTable th:first-child,
+.scheduleTable td:first-child {
+  border-left: 1px solid var(--line);
+}
+
+.scheduleTable thead tr:first-child th {
+  border-top: 1px solid var(--line);
+}
+
+.dateCell {
+  width: 92px;
+  background: #fbfcfd;
+  padding: 10px !important;
+  font-weight: 800;
+}
+
+.dateCell small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.shiftCard {
+  width: 100%;
+  min-height: 70px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  text-align: left;
+  padding: 9px 10px;
+}
+
+.shiftCard:hover:not(:disabled) {
+  transform: none;
+  background: #f8fbfc;
+}
+
+.shiftCard.selected {
+  background: rgba(23, 107, 135, 0.1);
+  box-shadow: inset 0 0 0 2px var(--brand);
+}
+
+.shiftCard.unassigned {
+  background: rgba(179, 58, 58, 0.08);
+  color: var(--bad);
+}
+
+.shiftCard small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+}
+
+.miniRow {
+  display: grid;
+  grid-template-columns: 72px 1fr 1fr;
+  gap: 6px;
+}
+
+.emptyBox {
+  border: 1px dashed var(--line-strong);
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: var(--muted);
+  padding: 12px;
+  font-size: 13px;
+}
+
+.shiftInspector {
+  align-content: start;
+}
+
+.candidate {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.candidate.active {
+  border-color: var(--brand);
+  background: rgba(23, 107, 135, 0.09);
+}

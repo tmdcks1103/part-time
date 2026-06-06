@@ -1,0 +1,186 @@
+{
+  "summary": {
+    "month": "2026-06",
+    "total_shifts": 112,
+    "assigned_shifts": 111,
+    "unassigned_shifts": 1,
+    "required_credit_hours": 478.0,
+    "total_credit_hours": 473.0,
+    "min_hours": 38.0,
+    "max_hours": 40.0,
+    "hour_range": 2.0,
+    "assistant_hours": [
+      {
+        "id": "seonghun",
+        "name": "김성훈",
+        "short_name": "성훈",
+        "hours": 38.0,
+        "shift_count": 9,
+        "weekend_count": 2,
+        "shift_types": {
+          "open": 1,
+          "middle": 4,
+          "close": 2,
+          "night": 2
+        }
+      },
+      {
+        "id": "daeyong",
+        "name": "이대용",
+        "short_name": "대용",
+        "hours": 39.0,
+        "shift_count": 9,
+        "weekend_count": 3,
+        "shift_types": {
+          "open": 4,
+          "middle": 1,
+          "close": 3,
+          "night": 1
+        }
+      },
+      {
+        "id": "jeongeun",
+        "name": "김정은",
+        "short_name": "정은",
+        "hours": 39.0,
+        "shift_count": 8,
+        "weekend_count": 2,
+        "shift_types": {
+          "open": 2,
+          "middle": 1,
+          "close": 5,
+          "night": 0
+        }
+      },
+      {
+        "id": "joohwan",
+        "name": "김주환",
+        "short_name": "주환",
+        "hours": 39.0,
+        "shift_count": 8,
+        "weekend_count": 2,
+        "shift_types": {
+          "open": 1,
+          "middle": 1,
+          "close": 6,
+          "night": 0
+        }
+      },
+      {
+        "id": "chaeyeon",
+        "name": "오채연",
+        "short_name": "채연",
+        "hours": 39.0,
+        "shift_count": 8,
+        "weekend_count": 3,
+        "shift_types": {
+          "open": 4,
+          "middle": 2,
+          "close": 2,
+          "night": 0
+        }
+      },
+      {
+        "id": "hanbyul",
+        "name": "배한별",
+        "short_name": "한별",
+        "hours": 39.0,
+        "shift_count": 10,
+        "weekend_count": 2,
+        "shift_types": {
+          "open": 2,
+          "middle": 3,
+          "close": 2,
+          "night": 3
+        }
+      },
+      {
+        "id": "namin",
+        "name": "박나민",
+        "short_name": "나민",
+        "hours": 40.0,
+        "shift_count": 10,
+        "weekend_count": 2,
+        "shift_types": {
+          "open": 1,
+          "middle": 5,
+          "close": 1,
+          "night": 3
+        }
+      },
+      {
+        "id": "seoyeon",
+        "name": "고서연",
+        "short_name": "서연",
+        "hours": 40.0,
+        "shift_count": 10,
+        "weekend_count": 1,
+        "shift_types": {
+          "open": 5,
+          "middle": 1,
+          "close": 1,
+          "night": 3
+        }
+      },
+      {
+        "id": "sunwoo",
+        "name": "진선우",
+        "short_name": "선우",
+        "hours": 40.0,
+        "shift_count": 11,
+        "weekend_count": 2,
+        "shift_types": {
+          "open": 2,
+          "middle": 3,
+          "close": 1,
+          "night": 5
+        }
+      },
+      {
+        "id": "seungchan",
+        "name": "김승찬",
+        "short_name": "승찬",
+        "hours": 40.0,
+        "shift_count": 9,
+        "weekend_count": 2,
+        "shift_types": {
+          "open": 1,
+          "middle": 5,
+          "close": 2,
+          "night": 1
+        }
+      },
+      {
+        "id": "jihyun",
+        "name": "김지현",
+        "short_name": "지현",
+        "hours": 40.0,
+        "shift_count": 10,
+        "weekend_count": 1,
+        "shift_types": {
+          "open": 2,
+          "middle": 1,
+          "close": 4,
+          "night": 3
+        }
+      },
+      {
+        "id": "taewoo",
+        "name": "김태우",
+        "short_name": "태우",
+        "hours": 40.0,
+        "shift_count": 9,
+        "weekend_count": 2,
+        "shift_types": {
+          "open": 5,
+          "middle": 2,
+          "close": 1,
+          "night": 1
+        }
+      }
+    ]
+  },
+  "validation_issues": [
+    "2026-06-15 미들: 배정 가능한 조교 없음"
+  ]
+}

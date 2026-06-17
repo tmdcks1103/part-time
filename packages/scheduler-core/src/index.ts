@@ -164,9 +164,11 @@ function objective(config: SchedulerConfig, assignments: AssignmentMap, shifts: 
   const deviation = Math.sqrt(values.reduce((sum, value) => sum + (value - average) ** 2, 0) / values.length);
   const counts = summary.assistantHours.map((assistant) => assistant.shiftCount);
   const weekends = summary.assistantHours.map((assistant) => assistant.weekendCount);
+  const nights = summary.assistantHours.map((assistant) => assistant.shiftTypes.night ?? 0);
   return [
     summary.hourRange,
     deviation,
+    Math.max(...nights) - Math.min(...nights),
     Math.max(...counts) - Math.min(...counts),
     Math.max(...weekends) - Math.min(...weekends)
   ];
@@ -209,7 +211,7 @@ function greedyOnce(config: SchedulerConfig, shifts: ShiftInstance[], candidates
         Math.max(0, projected - targetHours) * 1.8 +
         counts[assistantId] * 0.2 +
         weekends[assistantId] * (shift.dayKind === "weekend" ? 0.55 : 0.06) +
-        (shiftTypeCounts[assistantId][shift.key] ?? 0) * 0.38 +
+        (shiftTypeCounts[assistantId][shift.key] ?? 0) * (shift.key === "night" ? 1.25 : 0.38) +
         random() * 1.4;
       return !best || score < best.score ? { id: assistantId, score } : best;
     }, null)?.id;

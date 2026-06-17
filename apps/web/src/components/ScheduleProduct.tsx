@@ -8,16 +8,24 @@ import {
   summarize,
   UNASSIGNED_ID,
   validate,
+  type AvailabilityRule,
   type AssistantProfile,
   type AssignmentMap,
   type SchedulerConfig,
+  type ShiftKey,
   type ShiftInstance,
   type SolveResult
 } from "@part-time/scheduler-core";
-import { canManageSchedule, demoUsers, type AppUser, type UserRole } from "@/lib/auth";
+import { canManageSchedule, type AppUser } from "@/lib/auth";
 import type { ScheduleVersion } from "@/lib/schedule-store";
 
 const shiftColumns = ["open", "middle", "close", "night"];
+const shiftLabels: Record<string, string> = {
+  open: "오픈",
+  middle: "미들",
+  close: "마감",
+  night: "야간"
+};
 const dayLabels: Record<string, string> = {
   mon: "월",
   tue: "화",
@@ -34,12 +42,12 @@ interface ScheduleProductProps {
 
 export function ScheduleProduct({ initialConfig, versions, initialUser }: ScheduleProductProps) {
   const [config, setConfig] = useState<SchedulerConfig>(initialConfig);
-  const [currentUser, setCurrentUser] = useState<AppUser>(initialUser);
   const [attempts, setAttempts] = useState(2500);
   const [seed, setSeed] = useState(202606);
   const [selectedAssistantId, setSelectedAssistantId] = useState(initialConfig.assistants[0]?.id ?? "");
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
   const [manualAssignments, setManualAssignments] = useState<AssignmentMap | null>(null);
+  const [showGuide, setShowGuide] = useState(true);
 
   const solveResult = useMemo<SolveResult>(() => solveSchedule(config, { attempts, seed }), [config, attempts, seed]);
   const assignments = manualAssignments ?? solveResult.assignments;
@@ -51,7 +59,9 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
 
   const selectedAssistant = config.assistants.find((assistant) => assistant.id === selectedAssistantId);
   const selectedShift = solveResult.shifts.find((shift) => shift.id === selectedShiftId) ?? null;
-  const managerMode = canManageSchedule(currentUser.role);
+  const managerMode = canManageSchedule(initialUser.role);
+  const nightCounts = summary.assistantHours.map((assistant) => assistant.shiftTypes.night ?? 0);
+  const nightRange = nightCounts.length ? Math.max(...nightCounts) - Math.min(...nightCounts) : 0;
 
   function regenerate() {
     setManualAssignments(null);
@@ -65,6 +75,21 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
       return next;
     });
     setManualAssignments(null);
+  }
+
+  function updateMonth(month: string) {
+    patchConfig((draft) => {
+      draft.month = month;
+      draft.title = `${monthLabel(month)} 조교 근무표`;
+      draft.assistants.forEach((assistant) => {
+        assistant.unavailable_rules = (assistant.unavailable_rules ?? []).map((rule) => ({
+          ...rule,
+          date: remapDateToMonth(rule.date, month)
+        }));
+      });
+    });
+    const numericSeed = Number(month.replace("-", ""));
+    if (!Number.isNaN(numericSeed)) setSeed(numericSeed);
   }
 
   function assignShift(assistantId: string) {
@@ -104,30 +129,29 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
     <main className="product-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">제2생활관 조교 근무 운영</p>
-          <h1>월간 근무표 워크스페이스</h1>
+          <p className="eyebrow">근무 담당자용 편성 화면</p>
+          <h1>{monthLabel(config.month)} 근무표 편성실</h1>
         </div>
         <div className="topbarControls">
-          <select
-            aria-label="데모 사용자"
-            value={currentUser.id}
-            onChange={(event) => setCurrentUser(demoUsers.find((user) => user.id === event.target.value) ?? initialUser)}
-          >
-            {demoUsers.map((user) => (
-              <option key={user.id} value={user.id}>
-                {user.name} · {roleLabel(user.role)}
-              </option>
-            ))}
-          </select>
+          <button type="button" onClick={() => setShowGuide((value) => !value)}>{showGuide ? "가이드 닫기" : "가이드 보기"}</button>
           <button type="button" onClick={exportJson}>JSON</button>
           <button type="button" onClick={exportCsv}>CSV</button>
           <button type="button" className="primary" onClick={regenerate} disabled={!managerMode}>재생성</button>
         </div>
       </header>
 
+      {showGuide ? (
+        <section className="guideRail" aria-label="편성 가이드">
+          <GuideBubble step="1" title="달과 기준을 먼저 고르세요" body="근무월을 바꾸면 기존 불가 날짜가 같은 일자로 이동합니다." />
+          <GuideBubble step="2" title="조교별 불가 일정을 붙여넣으세요" body="예: 14-17 전체불가, 16 오픈 불가처럼 입력하고 적용합니다." />
+          <GuideBubble step="3" title="표에서 칸을 눌러 마지막 조정" body="미배정이나 특정 날짜를 선택해 가능한 조교로 직접 바꿀 수 있습니다." />
+        </section>
+      ) : null}
+
       <section className="metrics">
         <Metric label="배정" value={`${summary.assignedShifts}/${summary.totalShifts}`} />
         <Metric label="시간 편차" value={`${summary.hourRange.toFixed(1)}h`} tone={summary.hourRange <= config.rules.fairness_tolerance_hours ? "ok" : "bad"} />
+        <Metric label="야간 편차" value={`${nightRange}회`} tone={nightRange <= 1 ? "ok" : "bad"} />
         <Metric label="미배정" value={`${summary.unassignedShifts}`} tone={summary.unassignedShifts ? "bad" : "ok"} />
         <Metric label="검증" value={issues.length ? `${issues.length}건` : "통과"} tone={issues.length ? "bad" : "ok"} />
       </section>
@@ -141,7 +165,7 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
             <div className="formGrid">
               <label>
                 <span>근무월</span>
-                <input value={config.month} type="month" disabled={!managerMode} onChange={(event) => patchConfig((draft) => { draft.month = event.target.value; })} />
+                <input value={config.month} type="month" disabled={!managerMode} onChange={(event) => updateMonth(event.target.value)} />
               </label>
               <label>
                 <span>편차 허용</span>
@@ -175,7 +199,7 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
                   >
                     <span>
                       <strong>{assistant.name}</strong>
-                      <small>{assistant.short_name}</small>
+                      <small>{assistant.short_name} · 야간 {person?.shiftTypes.night ?? 0}회</small>
                     </span>
                     <b>{person?.hours.toFixed(0) ?? 0}h</b>
                   </button>
@@ -205,7 +229,7 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
               <h2>{config.month} 근무표</h2>
               <p>{issues[0] ?? "모든 하드 제약을 통과했습니다."}</p>
             </div>
-            <span className={managerMode ? "rolePill manager" : "rolePill"}>{roleLabel(currentUser.role)}</span>
+            <span className={managerMode ? "rolePill manager" : "rolePill"}>담당자 모드</span>
           </div>
           <ScheduleTable
             shifts={solveResult.shifts}
@@ -219,7 +243,8 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
         <aside className="panel rightPanel">
           <AssistantEditor
             assistant={selectedAssistant}
-            disabled={!managerMode && currentUser.assistantId !== selectedAssistant?.id}
+            month={config.month}
+            disabled={!managerMode}
             onChange={(assistant) => patchConfig((draft) => {
               const index = draft.assistants.findIndex((item) => item.id === assistant.id);
               if (index >= 0) draft.assistants[index] = assistant;
@@ -235,6 +260,8 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
           />
         </aside>
       </section>
+
+      <FloatingDilemma />
     </main>
   );
 }
@@ -244,6 +271,35 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
     <div className="metric">
       <span>{label}</span>
       <strong className={tone ? `tone-${tone}` : undefined}>{value}</strong>
+    </div>
+  );
+}
+
+function GuideBubble({ step, title, body }: { step: string; title: string; body: string }) {
+  return (
+    <article className="guideBubble">
+      <b>{step}</b>
+      <div>
+        <strong>{title}</strong>
+        <p>{body}</p>
+      </div>
+    </article>
+  );
+}
+
+function FloatingDilemma() {
+  return (
+    <div className="floatingDilemma">
+      <button type="button" className="floatingDilemmaButton" aria-describedby="floating-dilemma-copy">
+        ?
+      </button>
+      <div id="floating-dilemma-copy" className="floatingDilemmaPopover" role="tooltip">
+        <p>김정은이 만들어달라고 해서 만들었는데 배은망덕해서 지울까 고민중인데 어떻게 생각해? 지울까?</p>
+        <div>
+          <button type="button">Yes</button>
+          <button type="button">No</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -318,13 +374,16 @@ function ScheduleTable({
 
 function AssistantEditor({
   assistant,
+  month,
   disabled,
   onChange
 }: {
   assistant?: AssistantProfile;
+  month: string;
   disabled: boolean;
   onChange: (assistant: AssistantProfile) => void;
 }) {
+  const [bulkText, setBulkText] = useState("");
   if (!assistant) return <section className="panelBlock"><div className="emptyBox">조교를 선택하세요.</div></section>;
   const activeAssistant = assistant;
 
@@ -369,6 +428,59 @@ function AssistantEditor({
               </select>
               <input disabled={disabled} type="time" value={row.range[0]} onChange={(event) => updateAssistant((draft) => { draft.classes[row.day as keyof typeof draft.classes]![row.index][0] = event.target.value; })} />
               <input disabled={disabled} type="time" value={row.range[1]} onChange={(event) => updateAssistant((draft) => { draft.classes[row.day as keyof typeof draft.classes]![row.index][1] = event.target.value; })} />
+            </div>
+          ))}
+        </div>
+        <div className="miniTitle">
+          <h3>근무 제한</h3>
+          <button type="button" disabled={disabled} onClick={() => updateAssistant((draft) => {
+            draft.unavailable_rules ??= [];
+            draft.unavailable_rules.push({ date: `${month}-01`, mode: "all", reason: "" });
+          })}>추가</button>
+        </div>
+        <div className="quickInput">
+          <textarea
+            disabled={disabled}
+            value={bulkText}
+            placeholder={"14-17 전체불가\n16 오픈 불가\n20 야간 불가"}
+            onChange={(event) => setBulkText(event.target.value)}
+          />
+          <button
+            type="button"
+            disabled={disabled || !bulkText.trim()}
+            onClick={() => {
+              const rules = parseBulkUnavailable(bulkText, month);
+              if (!rules.length) return;
+              updateAssistant((draft) => {
+                draft.unavailable_rules = [...(draft.unavailable_rules ?? []), ...rules];
+              });
+              setBulkText("");
+            }}
+          >
+            빠른 입력 적용
+          </button>
+        </div>
+        <div className="ruleRows">
+          {(activeAssistant.unavailable_rules ?? []).map((rule, index) => (
+            <div key={`${rule.date}-${index}`} className="ruleRow">
+              <input disabled={disabled} type="date" value={rule.date} onChange={(event) => updateAssistant((draft) => {
+                draft.unavailable_rules[index] = { ...draft.unavailable_rules[index], date: event.target.value };
+              })} />
+              <select disabled={disabled} value={ruleKind(rule)} onChange={(event) => updateAssistant((draft) => {
+                draft.unavailable_rules[index] = buildRuleFromKind(draft.unavailable_rules[index], event.target.value);
+              })}>
+                <option value="all">전체 불가</option>
+                <option value="block:open">오픈 불가</option>
+                <option value="block:middle">미들 불가</option>
+                <option value="block:close">마감 불가</option>
+                <option value="block:night">야간 불가</option>
+              </select>
+              <input disabled={disabled} value={rule.reason ?? ""} placeholder="사유" onChange={(event) => updateAssistant((draft) => {
+                draft.unavailable_rules[index] = { ...draft.unavailable_rules[index], reason: event.target.value };
+              })} />
+              <button type="button" disabled={disabled} aria-label="근무 제한 삭제" onClick={() => updateAssistant((draft) => {
+                draft.unavailable_rules.splice(index, 1);
+              })}>삭제</button>
             </div>
           ))}
         </div>
@@ -448,13 +560,96 @@ function moveClass(assistant: AssistantProfile, oldDay: string, index: number, n
   assistant.classes[newDay as keyof typeof assistant.classes]!.push(range);
 }
 
-function roleLabel(role: UserRole) {
-  return {
-    admin: "관리자",
-    scheduler: "담당자",
-    assistant: "조교",
-    viewer: "조회"
-  }[role];
+function monthLabel(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  if (!year || !monthNumber) return month;
+  return `${year}년 ${monthNumber}월`;
+}
+
+function remapDateToMonth(date: string, month: string) {
+  const day = Number(date.split("-")[2] ?? 1);
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(year, monthNumber, 0).getDate();
+  return `${month}-${String(Math.min(Math.max(day, 1), lastDay)).padStart(2, "0")}`;
+}
+
+function isoDate(month: string, day: number) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(year, monthNumber, 0).getDate();
+  if (!year || !monthNumber || day < 1 || day > lastDay) return null;
+  return `${month}-${String(day).padStart(2, "0")}`;
+}
+
+function ruleKind(rule: AvailabilityRule) {
+  if (rule.mode === "all") return "all";
+  const blocked = rule.unavailable_shifts?.[0];
+  return blocked ? `block:${blocked}` : "all";
+}
+
+function buildRuleFromKind(rule: AvailabilityRule, kind: string): AvailabilityRule {
+  if (kind === "all") {
+    return { date: rule.date, mode: "all", reason: rule.reason };
+  }
+  const key = kind.replace("block:", "") as ShiftKey;
+  return { date: rule.date, unavailable_shifts: [key], reason: rule.reason };
+}
+
+function parseBulkUnavailable(text: string, month: string): AvailabilityRule[] {
+  return text
+    .split(/\n+/)
+    .flatMap((line) => parseUnavailableLine(line, month));
+}
+
+function parseUnavailableLine(line: string, month: string): AvailabilityRule[] {
+  const trimmed = line.trim();
+  if (!trimmed) return [];
+  const dates = expandDates(trimmed, month);
+  if (!dates.length) return [];
+
+  const unavailableShifts = Object.entries(shiftLabels)
+    .filter(([key, label]) => trimmed.toLowerCase().includes(key) || trimmed.includes(label))
+    .map(([key]) => key as ShiftKey);
+  const isAllDay = unavailableShifts.length === 0 || trimmed.includes("전체") || trimmed.includes("종일");
+  const reason = trimmed.replace(/\s+/g, " ");
+
+  return dates.map((date) =>
+    isAllDay
+      ? { date, mode: "all", reason }
+      : { date, unavailable_shifts: unavailableShifts, reason }
+  );
+}
+
+function expandDates(text: string, month: string) {
+  const dates = new Set<string>();
+  const rangePattern = /(?:(\d{1,2})[/.])?(\d{1,2})\s*[-~]\s*(?:(\d{1,2})[/.])?(\d{1,2})/g;
+  const isoPattern = /\b\d{4}-\d{2}-(\d{2})\b/g;
+  let sanitized = text;
+
+  for (const match of text.matchAll(isoPattern)) {
+    const date = isoDate(month, Number(match[1]));
+    if (date) dates.add(date);
+    sanitized = sanitized.replace(match[0], " ");
+  }
+
+  for (const match of sanitized.matchAll(rangePattern)) {
+    const startDay = Number(match[2]);
+    const endDay = Number(match[4]);
+    const [from, to] = startDay <= endDay ? [startDay, endDay] : [endDay, startDay];
+    for (let day = from; day <= to; day += 1) {
+      const date = isoDate(month, day);
+      if (date) dates.add(date);
+    }
+    sanitized = sanitized.replace(match[0], " ");
+  }
+
+  const singlePattern = /(?:(\d{1,2})[/.])?(\d{1,2})(?!\s*[:시])/g;
+  for (const match of sanitized.matchAll(singlePattern)) {
+    const day = Number(match[2]);
+    const date = isoDate(month, day);
+    if (date) dates.add(date);
+  }
+
+  return [...dates].sort();
 }
 
 function download(filename: string, blob: Blob) {

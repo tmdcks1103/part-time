@@ -130,7 +130,7 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
       <header className="topbar">
         <div>
           <p className="eyebrow">근무 담당자용 편성 화면</p>
-          <h1>{monthLabel(config.month)} 근무표 편성실</h1>
+          <h1>{monthLabel(config.month)} 근무표 워크프레임</h1>
         </div>
         <div className="topbarControls">
           <button type="button" onClick={() => setShowGuide((value) => !value)}>{showGuide ? "가이드 닫기" : "가이드 보기"}</button>

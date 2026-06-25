@@ -31,13 +31,15 @@ body {
 
 button,
 input,
-select {
+select,
+.buttonLink {
   font: inherit;
 }
 
 button,
 select,
-input {
+input,
+.buttonLink {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #fff;
@@ -52,10 +54,20 @@ button {
   transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
-button:hover:not(:disabled) {
+button:hover:not(:disabled),
+.buttonLink:hover {
   transform: translateY(-1px);
   border-color: var(--line-strong);
   box-shadow: 0 8px 22px rgba(24, 38, 45, 0.08);
+}
+
+.buttonLink {
+  min-height: 36px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 12px;
+  text-decoration: none;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
 button:disabled,
@@ -233,6 +245,13 @@ h3 {
   align-items: start;
 }
 
+.periodWorkspace {
+  display: grid;
+  grid-template-columns: 320px minmax(680px, 1fr) 320px;
+  gap: 14px;
+  align-items: start;
+}
+
 .panel {
   min-height: calc(100vh - 150px);
   border: 1px solid var(--line);
@@ -243,9 +262,15 @@ h3 {
 }
 
 .leftPanel,
-.rightPanel {
+.rightPanel,
+.periodControls,
+.periodInspectorPanel {
   max-height: calc(100vh - 150px);
   overflow: auto;
+}
+
+.periodSchedulePanel {
+  min-height: calc(100vh - 150px);
 }
 
 .panelBlock {
@@ -276,12 +301,25 @@ h3 {
   gap: 10px;
 }
 
+.checkboxLabel {
+  min-height: 58px;
+  display: grid;
+  align-content: end;
+}
+
+.checkboxLabel input {
+  width: 36px;
+  justify-self: start;
+  accent-color: var(--brand);
+}
+
 .assistantList,
 .versionList,
 .editorStack,
 .miniRows,
 .shiftInspector,
-.ruleRows {
+.ruleRows,
+.periodRoster {
   display: grid;
   gap: 8px;
 }
@@ -323,6 +361,36 @@ h3 {
   padding: 10px;
 }
 
+.periodPerson {
+  width: 100%;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.periodPerson.active {
+  border-color: var(--brand);
+  background: rgba(23, 107, 135, 0.09);
+}
+
+.periodPerson small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.periodPerson b {
+  color: var(--brand);
+}
+
 .scheduleHeader {
   border-bottom: 1px solid var(--line);
   padding: 14px;
@@ -348,6 +416,10 @@ h3 {
   max-height: calc(100vh - 218px);
   overflow: auto;
   padding: 14px;
+}
+
+.periodTableScroller {
+  max-height: calc(100vh - 218px);
 }
 
 .scheduleTable {
@@ -465,6 +537,18 @@ select:focus {
 
 .ruleRow button {
   padding: 0 8px;
+}
+
+.periodQuickInput {
+  margin-bottom: 10px;
+}
+
+.periodRuleRow {
+  grid-template-columns: 1fr 1fr;
+}
+
+.periodRuleRow .reasonInput {
+  grid-column: 1 / -1;
 }
 
 .emptyBox {

@@ -24,6 +24,15 @@ export interface AvailabilityRule {
   reason?: string;
 }
 
+export interface FairnessWindow {
+  id: string;
+  label: string;
+  start_date: string;
+  end_date: string;
+  tolerance_hours: number;
+  active?: boolean;
+}
+
 export interface AssistantProfile {
   id: string;
   name: string;
@@ -39,6 +48,8 @@ export interface SchedulerConfig {
   notes?: string[];
   rules: {
     fairness_tolerance_hours: number;
+    ignore_class_conflicts?: boolean;
+    fairness_windows?: FairnessWindow[];
     max_shifts_per_day: number;
     shift_templates: Record<DayKind, ShiftTemplate[]>;
   };

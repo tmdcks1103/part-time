@@ -134,6 +134,7 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
         </div>
         <div className="topbarControls">
           <button type="button" onClick={() => setShowGuide((value) => !value)}>{showGuide ? "가이드 닫기" : "가이드 보기"}</button>
+          <a className="buttonLink" href="/period">기간 편성</a>
           <button type="button" onClick={exportJson}>JSON</button>
           <button type="button" onClick={exportCsv}>CSV</button>
           <button type="button" className="primary" onClick={regenerate} disabled={!managerMode}>재생성</button>
@@ -170,6 +171,10 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
               <label>
                 <span>편차 허용</span>
                 <input value={config.rules.fairness_tolerance_hours} type="number" disabled={!managerMode} onChange={(event) => patchConfig((draft) => { draft.rules.fairness_tolerance_hours = Number(event.target.value); })} />
+              </label>
+              <label className="checkboxLabel">
+                <span>수업 제외</span>
+                <input checked={!config.rules.ignore_class_conflicts} type="checkbox" disabled={!managerMode} onChange={(event) => patchConfig((draft) => { draft.rules.ignore_class_conflicts = !event.target.checked; })} />
               </label>
               <label>
                 <span>시도 횟수</span>
@@ -255,6 +260,7 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
             assistants={config.assistants}
             assignments={assignments}
             shifts={solveResult.shifts}
+            config={config}
             disabled={!managerMode}
             onAssign={assignShift}
           />
@@ -494,6 +500,7 @@ function ShiftInspector({
   assistants,
   assignments,
   shifts,
+  config,
   disabled,
   onAssign
 }: {
@@ -501,6 +508,7 @@ function ShiftInspector({
   assistants: AssistantProfile[];
   assignments: AssignmentMap;
   shifts: ShiftInstance[];
+  config: SchedulerConfig;
   disabled: boolean;
   onAssign: (assistantId: string) => void;
 }) {
@@ -518,7 +526,7 @@ function ShiftInspector({
           미배정
         </button>
         {assistants.map((assistant) => {
-          const reason = blockedReason(assistant, shift);
+          const reason = blockedReason(assistant, shift, config);
           const sameDay = shifts.some((other) => other.id !== shift.id && other.date === shift.date && assignments[other.id] === assistant.id);
           const blocked = Boolean(reason || sameDay);
           return (

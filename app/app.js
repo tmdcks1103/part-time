@@ -342,10 +342,13 @@ function renderAssistantList() {
   document.querySelector("#assistantList").innerHTML = assistants.map(assistant => {
     const hours = state.summary.hours[assistant.id] || 0;
     return `
-      <button class="assistant-item ${assistant.id === state.selectedAssistantId ? "active" : ""}" data-assistant="${assistant.id}" type="button">
-        <span><strong>${escapeHtml(assistant.name)}</strong><small>${escapeHtml(assistant.short_name)}</small></span>
-        <span class="assistant-hours">${hours.toFixed(0)}h</span>
-      </button>
+      <div class="assistant-row ${assistant.id === state.selectedAssistantId ? "active" : ""}">
+        <button class="assistant-item" data-assistant="${escapeAttr(assistant.id)}" type="button">
+          <span><strong>${escapeHtml(assistant.name)}</strong><small>${escapeHtml(assistant.short_name)}</small></span>
+          <span class="assistant-hours">${hours.toFixed(0)}h</span>
+        </button>
+        <button class="assistant-delete-btn icon-button danger" data-remove-person="${escapeAttr(assistant.id)}" title="삭제" type="button">×</button>
+      </div>
     `;
   }).join("");
 }
@@ -363,6 +366,10 @@ function renderAssistantEditor() {
       <div class="editor-row">
         <label><span>이름</span><input id="assistantName" value="${escapeAttr(assistant.name)}"></label>
         <label><span>표시명</span><input id="assistantShortName" value="${escapeAttr(assistant.short_name)}"></label>
+      </div>
+      <div class="editor-nav">
+        <button data-prev-assistant type="button" class="small-button" ${state.config.assistants.indexOf(assistant) === 0 ? "disabled" : ""}>‹ 이전</button>
+        <button data-next-assistant type="button" class="small-button" ${state.config.assistants.indexOf(assistant) === state.config.assistants.length - 1 ? "disabled" : ""}>다음 ›</button>
       </div>
       <div class="subtle-heading"><h3>수업 시간</h3><button id="addClass" class="small-button" type="button">추가</button></div>
       <div class="mini-table">
@@ -394,7 +401,10 @@ function renderAssistantEditor() {
           `;
         }).join("") || `<div class="muted-box">등록된 근무 불가가 없습니다.</div>`}
       </div>
-      <button id="removeAssistant" class="danger" type="button">조교 삭제</button>
+      <div class="editor-footer">
+        <button id="addAssistantEditor" class="small-button" type="button">+ 조교 추가</button>
+        <button id="removeAssistant" class="small-button danger" type="button">삭제</button>
+      </div>
     </div>
   `;
 }
@@ -451,16 +461,26 @@ function renderPeople() {
       .join("");
     return `
       <tr>
-        <th>${escapeHtml(assistant.name)}</th>
+        <th>
+          <button class="people-name-button" data-select-assistant="${escapeAttr(assistant.id)}" type="button">
+            ${escapeHtml(assistant.name)}
+          </button>
+        </th>
         <td>${hours.toFixed(1)}</td>
         <td><div class="bar"><span style="width:${Math.max(6, hours / maxHours * 100)}%"></span></div></td>
         <td>${assignments}</td>
+        <td class="people-action-cell">
+          <button class="icon-button danger" data-remove-person="${escapeAttr(assistant.id)}" title="삭제" type="button">×</button>
+        </td>
       </tr>
     `;
   }).join("");
   document.querySelector("#peopleView").innerHTML = `
+    <div class="people-toolbar">
+      <button class="small-button" data-add-assistant-people type="button">+ 조교 추가</button>
+    </div>
     <table class="people-table">
-      <thead><tr><th>조교</th><th>시간</th><th>분포</th><th>근무</th></tr></thead>
+      <thead><tr><th>조교</th><th>시간</th><th>분포</th><th>근무</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
@@ -642,6 +662,44 @@ function bindEvents() {
       state.config.assistants = state.config.assistants.filter(assistant => assistant.id !== state.selectedAssistantId);
       state.selectedAssistantId = state.config.assistants[0]?.id || "";
       regenerate();
+      return;
+    }
+    if (event.target.id === "addAssistantEditor") {
+      const id = `assistant_${Date.now()}`;
+      state.config.assistants.push({ id, name: "새 조교", short_name: "신규", classes: {}, unavailable_rules: [] });
+      state.selectedAssistantId = id;
+      regenerate();
+      return;
+    }
+    if (event.target.closest("[data-prev-assistant]")) {
+      const idx = state.config.assistants.findIndex(a => a.id === state.selectedAssistantId);
+      if (idx > 0) { state.selectedAssistantId = state.config.assistants[idx - 1].id; render(); }
+      return;
+    }
+    if (event.target.closest("[data-next-assistant]")) {
+      const idx = state.config.assistants.findIndex(a => a.id === state.selectedAssistantId);
+      if (idx < state.config.assistants.length - 1) { state.selectedAssistantId = state.config.assistants[idx + 1].id; render(); }
+      return;
+    }
+    const removePerson = event.target.closest("[data-remove-person]");
+    if (removePerson) {
+      const id = removePerson.dataset.removePerson;
+      state.config.assistants = state.config.assistants.filter(assistant => assistant.id !== id);
+      if (state.selectedAssistantId === id) state.selectedAssistantId = state.config.assistants[0]?.id || "";
+      regenerate();
+      return;
+    }
+    if (event.target.closest("[data-add-assistant-people]")) {
+      const id = `assistant_${Date.now()}`;
+      state.config.assistants.push({ id, name: "새 조교", short_name: "신규", classes: {}, unavailable_rules: [] });
+      state.selectedAssistantId = id;
+      regenerate();
+      return;
+    }
+    const selectAssistant = event.target.closest("[data-select-assistant]");
+    if (selectAssistant) {
+      state.selectedAssistantId = selectAssistant.dataset.selectAssistant;
+      render();
       return;
     }
     if (event.target.matches("[data-remove-class]")) {

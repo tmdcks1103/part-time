@@ -361,8 +361,27 @@ h3 {
   padding: 10px;
 }
 
+.periodPersonRow {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.periodPersonRow .periodDeleteBtn {
+  flex-shrink: 0;
+  width: 32px;
+  padding: 0;
+  color: var(--bad);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.periodPersonRow:hover .periodDeleteBtn {
+  opacity: 1;
+}
+
 .periodPerson {
-  width: 100%;
+  flex: 1;
   min-height: 54px;
   display: flex;
   align-items: center;

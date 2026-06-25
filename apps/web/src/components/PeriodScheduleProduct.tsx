@@ -187,6 +187,20 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
           <section className="panelBlock">
             <div className="blockTitle">
               <h2>조교별 제한 반영</h2>
+              {managerMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = `assistant_${Date.now()}`;
+                    patchConfig((draft) => {
+                      draft.assistants.push({ id, name: "새 조교", short_name: "신규", classes: {}, unavailable_rules: [] });
+                    });
+                    setSelectedAssistantId(id);
+                  }}
+                >
+                  + 추가
+                </button>
+              )}
             </div>
             <div className="periodRoster">
               {config.assistants.map((assistant) => {
@@ -194,18 +208,37 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
                 const unavailableCount = countUnavailableInRange(assistant, startDate, endDate);
                 const classCount = Object.values(assistant.classes ?? {}).reduce((sum, ranges) => sum + (ranges?.length ?? 0), 0);
                 return (
-                  <button
-                    key={assistant.id}
-                    type="button"
-                    className={assistant.id === selectedAssistantId ? "periodPerson active" : "periodPerson"}
-                    onClick={() => setSelectedAssistantId(assistant.id)}
-                  >
-                    <div>
-                      <strong>{assistant.name}</strong>
-                      <small>{unavailableCount}개 제한 · 수업 {classCount}개</small>
-                    </div>
-                    <b>{person?.hours.toFixed(0) ?? 0}h</b>
-                  </button>
+                  <div key={assistant.id} className="periodPersonRow">
+                    <button
+                      type="button"
+                      className={assistant.id === selectedAssistantId ? "periodPerson active" : "periodPerson"}
+                      onClick={() => setSelectedAssistantId(assistant.id)}
+                    >
+                      <div>
+                        <strong>{assistant.name}</strong>
+                        <small>{unavailableCount}개 제한 · 수업 {classCount}개</small>
+                      </div>
+                      <b>{person?.hours.toFixed(0) ?? 0}h</b>
+                    </button>
+                    {managerMode && (
+                      <button
+                        type="button"
+                        className="periodDeleteBtn"
+                        aria-label={`${assistant.name} 삭제`}
+                        onClick={() => {
+                          patchConfig((draft) => {
+                            draft.assistants = draft.assistants.filter((a) => a.id !== assistant.id);
+                          });
+                          if (selectedAssistantId === assistant.id) {
+                            const remaining = config.assistants.filter((a) => a.id !== assistant.id);
+                            setSelectedAssistantId(remaining[0]?.id ?? "");
+                          }
+                        }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   blockedReason,
   formatTime,
@@ -17,7 +17,7 @@ import {
   type SolveResult
 } from "@part-time/scheduler-core";
 import { canManageSchedule, type AppUser } from "@/lib/auth";
-import type { ScheduleVersion } from "@/lib/schedule-store";
+import { applyStoredRoster, saveStoredRoster, type ScheduleVersion } from "@/lib/schedule-store";
 
 const shiftColumns = ["open", "middle", "close", "night"];
 const shiftLabels: Record<string, string> = {
@@ -48,6 +48,17 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
   const [manualAssignments, setManualAssignments] = useState<AssignmentMap | null>(null);
   const [showGuide, setShowGuide] = useState(true);
+  const rosterHydrated = useRef(false);
+
+  useEffect(() => {
+    setConfig((current) => applyStoredRoster(current));
+    rosterHydrated.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!rosterHydrated.current) return;
+    saveStoredRoster(config.assistants);
+  }, [config.assistants]);
 
   const solveResult = useMemo<SolveResult>(() => solveSchedule(config, { attempts, seed }), [config, attempts, seed]);
   const assignments = manualAssignments ?? solveResult.assignments;
@@ -266,8 +277,6 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
           />
         </aside>
       </section>
-
-      <FloatingDilemma />
     </main>
   );
 }
@@ -290,23 +299,6 @@ function GuideBubble({ step, title, body }: { step: string; title: string; body:
         <p>{body}</p>
       </div>
     </article>
-  );
-}
-
-function FloatingDilemma() {
-  return (
-    <div className="floatingDilemma">
-      <button type="button" className="floatingDilemmaButton" aria-describedby="floating-dilemma-copy">
-        ?
-      </button>
-      <div id="floating-dilemma-copy" className="floatingDilemmaPopover" role="tooltip">
-        <p>김정은이 만들어달라고 해서 만들었는데 배은망덕해서 지울까 고민중인데 어떻게 생각해? 지울까?</p>
-        <div>
-          <button type="button">Yes</button>
-          <button type="button">No</button>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -390,6 +382,7 @@ function AssistantEditor({
   onChange: (assistant: AssistantProfile) => void;
 }) {
   const [bulkText, setBulkText] = useState("");
+  const [classBulkText, setClassBulkText] = useState("");
   if (!assistant) return <section className="panelBlock"><div className="emptyBox">조교를 선택하세요.</div></section>;
   const activeAssistant = assistant;
 
@@ -434,8 +427,33 @@ function AssistantEditor({
               </select>
               <input disabled={disabled} type="time" value={row.range[0]} onChange={(event) => updateAssistant((draft) => { draft.classes[row.day as keyof typeof draft.classes]![row.index][0] = event.target.value; })} />
               <input disabled={disabled} type="time" value={row.range[1]} onChange={(event) => updateAssistant((draft) => { draft.classes[row.day as keyof typeof draft.classes]![row.index][1] = event.target.value; })} />
+              <button type="button" disabled={disabled} aria-label="수업 시간 삭제" onClick={() => updateAssistant((draft) => {
+                draft.classes[row.day as keyof typeof draft.classes]!.splice(row.index, 1);
+              })}>삭제</button>
             </div>
           ))}
+        </div>
+        <div className="quickInput">
+          <textarea
+            disabled={disabled}
+            value={classBulkText}
+            placeholder={"개강 후 새 시간표를 붙여넣으면 기존 수업 시간을 모두 교체합니다.\n월 09:00-10:15, 11:00-11:50\n화 13:00-14:15\n수 09:00-09:50"}
+            onChange={(event) => setClassBulkText(event.target.value)}
+          />
+          <button
+            type="button"
+            disabled={disabled || !classBulkText.trim()}
+            onClick={() => {
+              const classes = parseBulkClasses(classBulkText);
+              if (!Object.keys(classes).length) return;
+              updateAssistant((draft) => {
+                draft.classes = classes;
+              });
+              setClassBulkText("");
+            }}
+          >
+            시간표 붙여넣기 (기존 시간표 교체)
+          </button>
         </div>
         <div className="miniTitle">
           <h3>근무 제한</h3>
@@ -600,6 +618,38 @@ function buildRuleFromKind(rule: AvailabilityRule, kind: string): AvailabilityRu
   }
   const key = kind.replace("block:", "") as ShiftKey;
   return { date: rule.date, unavailable_shifts: [key], reason: rule.reason };
+}
+
+const dayTokens: Record<string, string> = {
+  "월": "mon", "화": "tue", "수": "wed", "목": "thu", "금": "fri", "토": "sat", "일": "sun",
+  "mon": "mon", "tue": "tue", "wed": "wed", "thu": "thu", "fri": "fri", "sat": "sat", "sun": "sun"
+};
+
+function parseBulkClasses(text: string): AssistantProfile["classes"] {
+  const classes: AssistantProfile["classes"] = {};
+  const timePattern = /(\d{1,2}:\d{2})\s*[-~]\s*(\d{1,2}:\d{2})/g;
+
+  for (const rawLine of text.split(/\n+/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const dayMatch = Object.keys(dayTokens)
+      .sort((a, b) => b.length - a.length)
+      .find((token) => line.toLowerCase().startsWith(token.toLowerCase()));
+    if (!dayMatch) continue;
+    const day = dayTokens[dayMatch] as keyof typeof classes;
+
+    for (const match of line.matchAll(timePattern)) {
+      classes[day] ??= [];
+      classes[day]!.push([normalizeTime(match[1]), normalizeTime(match[2])]);
+    }
+  }
+
+  return classes;
+}
+
+function normalizeTime(value: string) {
+  const [hour, minute] = value.split(":");
+  return `${hour.padStart(2, "0")}:${minute}`;
 }
 
 function parseBulkUnavailable(text: string, month: string): AvailabilityRule[] {

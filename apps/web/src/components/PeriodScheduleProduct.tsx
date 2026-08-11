@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   blockedReason,
   formatTime,
@@ -17,6 +17,7 @@ import {
   type SolveResult
 } from "@part-time/scheduler-core";
 import { canManageSchedule, type AppUser } from "@/lib/auth";
+import { applyStoredRoster, saveStoredRoster } from "@/lib/schedule-store";
 
 const periodColumns = ["open", "middle", "close", "night"];
 const shiftLabels: Record<string, string> = {
@@ -42,6 +43,17 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
   const [selectedAssistantId, setSelectedAssistantId] = useState(initialConfig.assistants[0]?.id ?? "");
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
   const [manualAssignments, setManualAssignments] = useState<AssignmentMap | null>(null);
+  const rosterHydrated = useRef(false);
+
+  useEffect(() => {
+    setConfig((current) => applyStoredRoster(current));
+    rosterHydrated.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!rosterHydrated.current) return;
+    saveStoredRoster(config.assistants);
+  }, [config.assistants]);
 
   const managerMode = canManageSchedule(initialUser.role);
   const solveResult = useMemo<SolveResult>(
@@ -408,6 +420,17 @@ function PeriodLimitEditor({
         >
           추가
         </button>
+      </div>
+
+      <div className="formGrid">
+        <label>
+          <span>이름</span>
+          <input disabled={disabled} value={activeAssistant.name} onChange={(event) => updateAssistant((draft) => { draft.name = event.target.value; })} />
+        </label>
+        <label>
+          <span>표시명</span>
+          <input disabled={disabled} value={activeAssistant.short_name} onChange={(event) => updateAssistant((draft) => { draft.short_name = event.target.value; })} />
+        </label>
       </div>
 
       <div className="quickInput periodQuickInput">

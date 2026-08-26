@@ -29,6 +29,26 @@ create table if not exists schedule_drafts (
 
 alter table schedule_drafts enable row level security;
 
+-- schedule_drafts holds only the single latest live state per scope (continuously
+-- autosaved, like roster_assistants). schedule_versions is the append-only history on
+-- top of that: a new row per meaningful checkpoint (explicit save, a regenerate click,
+-- or a throttled periodic snapshot while someone is actively editing), so the "버전"
+-- list can show real history and let people load an earlier version back.
+create table if not exists schedule_versions (
+  id bigint generated always as identity primary key,
+  scope_key text not null,
+  kind text not null check (kind in ('month', 'period')),
+  label text not null,
+  settings jsonb not null default '{}'::jsonb,
+  manual_assignments jsonb not null default '{}'::jsonb,
+  summary jsonb,
+  created_by text not null default '',
+  created_at timestamptz not null default now()
+);
+
+alter table schedule_versions enable row level security;
+create index if not exists schedule_versions_scope_idx on schedule_versions (scope_key, created_at desc);
+
 create table if not exists activity_log (
   id bigint generated always as identity primary key,
   actor_name text not null,

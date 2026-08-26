@@ -8,3 +8,5 @@ dist/
 apps/web/.next/
 packages/*/dist/
 .vercel
+.env*
+.DS_Store

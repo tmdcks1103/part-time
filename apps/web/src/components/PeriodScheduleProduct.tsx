@@ -1,31 +1,28 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
-  blockedReason,
   formatTime,
   solveScheduleRange,
   summarize,
-  UNASSIGNED_ID,
   validate,
-  type AvailabilityRule,
   type AssistantProfile,
   type AssignmentMap,
   type SchedulerConfig,
-  type ShiftKey,
-  type ShiftInstance,
   type SolveResult
 } from "@part-time/scheduler-core";
 import { canManageSchedule, type AppUser } from "@/lib/auth";
-import { applyStoredRoster, saveStoredRoster } from "@/lib/schedule-store";
+import { applyStoredRoster } from "@/lib/schedule-store";
+import { countUnavailableInRange, download, parseBulkUnavailable, remapDateToMonth } from "@/lib/schedule-format";
+import { useIdentity } from "@/lib/identity";
+import { postActivity, useActivityFeed, useDraftPeek, useDraftSave, usePresence, useRosterSync } from "@/lib/collab";
+import { Metric } from "@/components/shared/Metric";
+import { ShiftGrid } from "@/components/shared/ShiftGrid";
+import { ShiftAssignmentPanel } from "@/components/shared/ShiftAssignmentPanel";
+import { UnavailableRuleRow } from "@/components/shared/UnavailableRuleRow";
+import { CollaboratorPanel, IdentityPicker } from "@/components/shared/CollaboratorPanel";
 
-const periodColumns = ["open", "middle", "close", "night"];
-const shiftLabels: Record<string, string> = {
-  open: "오픈",
-  middle: "미들",
-  close: "마감",
-  night: "야간"
-};
 const defaultStartDate = "2026-07-15";
 const defaultEndDate = "2026-07-31";
 
@@ -43,17 +40,23 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
   const [selectedAssistantId, setSelectedAssistantId] = useState(initialConfig.assistants[0]?.id ?? "");
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
   const [manualAssignments, setManualAssignments] = useState<AssignmentMap | null>(null);
-  const rosterHydrated = useRef(false);
+
+  const { identity, setIdentity } = useIdentity();
+  const scopeKey = `period:${startDate}:${endDate}`;
 
   useEffect(() => {
     setConfig((current) => applyStoredRoster(current));
-    rosterHydrated.current = true;
   }, []);
 
-  useEffect(() => {
-    if (!rosterHydrated.current) return;
-    saveStoredRoster(config.assistants);
-  }, [config.assistants]);
+  const roster = useRosterSync(
+    config.assistants,
+    (assistants) => patchConfig((draft) => { draft.assistants = assistants; }),
+    identity
+  );
+  const presence = usePresence("period", scopeKey, identity);
+  const activity = useActivityFeed(20);
+  const { draft, loading: draftLoading } = useDraftPeek(scopeKey);
+  const { status: draftSaveStatus, save: saveDraft } = useDraftSave(scopeKey, "period");
 
   const managerMode = canManageSchedule(initialUser.role);
   const solveResult = useMemo<SolveResult>(
@@ -112,6 +115,7 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
   function regenerate() {
     setManualAssignments(null);
     setSelectedShiftId(null);
+    if (identity) postActivity(identity, "재생성", undefined, scopeKey);
   }
 
   function exportJson() {
@@ -139,6 +143,52 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
     download(`${startDate}_${endDate}_period_schedule.csv`, new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
   }
 
+  function handleSaveDraft() {
+    if (!identity) return;
+    saveDraft(
+      {
+        settings: {
+          attempts,
+          seed,
+          fairnessToleranceHours: config.rules.fairness_tolerance_hours,
+          ignoreClassConflicts: config.rules.ignore_class_conflicts,
+          startDate,
+          endDate
+        },
+        manualAssignments: assignments,
+        summary: {
+          assignedShifts: summary.assignedShifts,
+          totalShifts: summary.totalShifts,
+          unassignedShifts: summary.unassignedShifts,
+          hourRange: summary.hourRange
+        }
+      },
+      identity
+    );
+  }
+
+  function handleLoadDraft() {
+    if (!draft) return;
+    const settings = draft.settings as {
+      attempts?: number;
+      seed?: number;
+      fairnessToleranceHours?: number;
+      ignoreClassConflicts?: boolean;
+      startDate?: string;
+      endDate?: string;
+    };
+    if (typeof settings.attempts === "number") setAttempts(settings.attempts);
+    if (typeof settings.seed === "number") setSeed(settings.seed);
+    if (settings.startDate) setStartDate(settings.startDate);
+    if (settings.endDate) setEndDate(settings.endDate);
+    patchConfig((next) => {
+      if (typeof settings.fairnessToleranceHours === "number") next.rules.fairness_tolerance_hours = settings.fairnessToleranceHours;
+      if (typeof settings.ignoreClassConflicts === "boolean") next.rules.ignore_class_conflicts = settings.ignoreClassConflicts;
+    });
+    setManualAssignments(draft.manualAssignments);
+    if (identity) postActivity(identity, "동료 버전 불러오기", `${draft.updatedBy}님 저장본`, scopeKey);
+  }
+
   return (
     <main className="product-shell periodShell">
       <header className="topbar">
@@ -147,7 +197,8 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
           <h1>{startDate} - {endDate} 근무표</h1>
         </div>
         <div className="topbarControls">
-          <a className="buttonLink" href="/">월간 편성</a>
+          <IdentityPicker identity={identity} onChange={setIdentity} />
+          <Link className="buttonLink" href="/">월간 편성</Link>
           <button type="button" onClick={exportJson}>JSON</button>
           <button type="button" onClick={exportCsv}>CSV</button>
           <button type="button" className="primary" disabled={!managerMode} onClick={regenerate}>재생성</button>
@@ -164,6 +215,20 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
 
       <section className="periodWorkspace">
         <aside className="panel periodControls">
+          <CollaboratorPanel
+            online={presence.online}
+            activity={activity}
+            rosterStatus={roster.status}
+            rosterUpdateAvailable={roster.updateAvailable}
+            onReloadRoster={roster.reloadFromServer}
+            draft={draft}
+            draftLoading={draftLoading}
+            draftStatus={draftSaveStatus}
+            onSaveDraft={handleSaveDraft}
+            onLoadDraft={handleLoadDraft}
+            identityMissing={!identity}
+          />
+
           <section className="panelBlock">
             <div className="blockTitle">
               <h2>기간 설정</h2>
@@ -208,6 +273,7 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
                       draft.assistants.push({ id, name: "새 조교", short_name: "신규", classes: {}, unavailable_rules: [] });
                     });
                     setSelectedAssistantId(id);
+                    if (identity) postActivity(identity, "조교 추가");
                   }}
                 >
                   + 추가
@@ -220,24 +286,28 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
                 const unavailableCount = countUnavailableInRange(assistant, startDate, endDate);
                 const classCount = Object.values(assistant.classes ?? {}).reduce((sum, ranges) => sum + (ranges?.length ?? 0), 0);
                 return (
-                  <div key={assistant.id} className="periodPersonRow">
+                  <div
+                    key={assistant.id}
+                    className={assistant.id === selectedAssistantId ? "assistantItem periodPerson active" : "assistantItem periodPerson"}
+                  >
                     <button
                       type="button"
-                      className={assistant.id === selectedAssistantId ? "periodPerson active" : "periodPerson"}
+                      className="assistantItemMain"
                       onClick={() => setSelectedAssistantId(assistant.id)}
                     >
-                      <div>
+                      <span>
                         <strong>{assistant.name}</strong>
                         <small>{unavailableCount}개 제한 · 수업 {classCount}개</small>
-                      </div>
+                      </span>
                       <b>{person?.hours.toFixed(0) ?? 0}h</b>
                     </button>
                     {managerMode && (
                       <button
                         type="button"
-                        className="periodDeleteBtn"
+                        className="assistantItemDelete"
                         aria-label={`${assistant.name} 삭제`}
                         onClick={() => {
+                          if (!window.confirm(`${assistant.name} 조교를 삭제할까요?`)) return;
                           patchConfig((draft) => {
                             draft.assistants = draft.assistants.filter((a) => a.id !== assistant.id);
                           });
@@ -245,9 +315,10 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
                             const remaining = config.assistants.filter((a) => a.id !== assistant.id);
                             setSelectedAssistantId(remaining[0]?.id ?? "");
                           }
+                          if (identity) postActivity(identity, "조교 삭제", assistant.name);
                         }}
                       >
-                        ×
+                        삭제
                       </button>
                     )}
                   </div>
@@ -276,17 +347,19 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
             </div>
             <span className={config.rules.ignore_class_conflicts ? "rolePill manager" : "rolePill"}>{config.rules.ignore_class_conflicts ? "방학 모드" : "수업 반영"}</span>
           </div>
-          <PeriodTable
+          <ShiftGrid
             shifts={solveResult.shifts}
             assignments={assignments}
             assistants={config.assistants}
             selectedShiftId={selectedShiftId}
             onSelectShift={setSelectedShiftId}
+            scrollerClassName="periodTableScroller"
           />
         </section>
 
         <aside className="panel periodInspectorPanel">
-          <PeriodInspector
+          <ShiftAssignmentPanel
+            title="후보 조정"
             shift={selectedShift}
             assistants={config.assistants}
             assignments={assignments}
@@ -298,83 +371,6 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
         </aside>
       </section>
     </main>
-  );
-}
-
-function Metric({ label, value, tone }: { label: string; value: string; tone?: "ok" | "bad" }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong className={tone ? `tone-${tone}` : undefined}>{value}</strong>
-    </div>
-  );
-}
-
-function PeriodTable({
-  shifts,
-  assignments,
-  assistants,
-  selectedShiftId,
-  onSelectShift
-}: {
-  shifts: ShiftInstance[];
-  assignments: AssignmentMap;
-  assistants: AssistantProfile[];
-  selectedShiftId: string | null;
-  onSelectShift: (id: string) => void;
-}) {
-  const assistantsById = Object.fromEntries(assistants.map((assistant) => [assistant.id, assistant]));
-  const grouped = shifts.reduce<Record<string, ShiftInstance[]>>((acc, shift) => {
-    acc[shift.date] ??= [];
-    acc[shift.date].push(shift);
-    return acc;
-  }, {});
-
-  return (
-    <div className="tableScroller periodTableScroller">
-      <table className="scheduleTable">
-        <thead>
-          <tr>
-            <th>날짜</th>
-            <th>오픈</th>
-            <th>미들</th>
-            <th>마감</th>
-            <th>야간</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Object.entries(grouped).map(([date, dateShifts]) => (
-            <tr key={date}>
-              <th className="dateCell">
-                {date.slice(5)}
-                <small>{dateShifts[0]?.dayName}</small>
-              </th>
-              {periodColumns.map((key) => {
-                const shift = dateShifts.find((item) => item.key === key);
-                if (!shift) return <td key={key} />;
-                const assistant = assistantsById[assignments[shift.id]];
-                return (
-                  <td key={shift.id}>
-                    <button
-                      type="button"
-                      className={[
-                        "shiftCard",
-                        shift.id === selectedShiftId ? "selected" : "",
-                        !assistant ? "unassigned" : ""
-                      ].join(" ")}
-                      onClick={() => onSelectShift(shift.id)}
-                    >
-                      <strong>{assistant?.short_name ?? "미배정"}</strong>
-                      <small>{formatTime(shift.start)}-{formatTime(shift.end)} · {shift.creditHours}h</small>
-                    </button>
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }
 
@@ -392,6 +388,7 @@ function PeriodLimitEditor({
   onChange: (assistant: AssistantProfile) => void;
 }) {
   const [bulkText, setBulkText] = useState("");
+  const [parseNotice, setParseNotice] = useState(false);
   if (!assistant) return <section className="panelBlock"><div className="emptyBox">조교를 선택하세요.</div></section>;
   const activeAssistant = assistant;
   const rules = activeAssistant.unavailable_rules ?? [];
@@ -438,102 +435,48 @@ function PeriodLimitEditor({
           disabled={disabled}
           value={bulkText}
           placeholder={"15-17 전체불가\n20 오픈 불가\n22 야간 불가"}
-          onChange={(event) => setBulkText(event.target.value)}
+          onChange={(event) => {
+            setBulkText(event.target.value);
+            setParseNotice(false);
+          }}
         />
         <button
           type="button"
           disabled={disabled || !bulkText.trim()}
           onClick={() => {
             const parsed = parseBulkUnavailable(bulkText, startDate.slice(0, 7));
-            if (!parsed.length) return;
+            if (!parsed.length) {
+              setParseNotice(true);
+              return;
+            }
             updateAssistant((draft) => {
               draft.unavailable_rules.push(...parsed);
             });
             setBulkText("");
+            setParseNotice(false);
           }}
         >
           빠른 입력 적용
         </button>
+        {parseNotice ? <small className="parseNotice">날짜를 인식하지 못했습니다. &quot;15-17 전체불가&quot;처럼 날짜를 포함해 입력해 주세요.</small> : null}
       </div>
 
       <div className="ruleRows periodRuleRows">
         {periodRules.map(({ rule, index }) => (
-          <div key={`${rule.date}-${index}`} className="ruleRow periodRuleRow">
-            <input disabled={disabled} type="date" value={rule.date} onChange={(event) => updateAssistant((draft) => {
-              draft.unavailable_rules[index] = { ...draft.unavailable_rules[index], date: event.target.value };
-            })} />
-            <select disabled={disabled} value={ruleKind(rule)} onChange={(event) => updateAssistant((draft) => {
-              draft.unavailable_rules[index] = buildRuleFromKind(draft.unavailable_rules[index], event.target.value);
-            })}>
-              <option value="all">전체 불가</option>
-              <option value="block:open">오픈 불가</option>
-              <option value="block:middle">미들 불가</option>
-              <option value="block:close">마감 불가</option>
-              <option value="block:night">야간 불가</option>
-            </select>
-            <input className="reasonInput" disabled={disabled} value={rule.reason ?? ""} placeholder="사유" onChange={(event) => updateAssistant((draft) => {
-              draft.unavailable_rules[index] = { ...draft.unavailable_rules[index], reason: event.target.value };
-            })} />
-            <button type="button" disabled={disabled} aria-label="근무 제한 삭제" onClick={() => updateAssistant((draft) => {
+          <UnavailableRuleRow
+            key={`${rule.date}-${index}`}
+            rule={rule}
+            disabled={disabled}
+            compact
+            onChange={(next) => updateAssistant((draft) => {
+              draft.unavailable_rules[index] = next;
+            })}
+            onDelete={() => updateAssistant((draft) => {
               draft.unavailable_rules.splice(index, 1);
-            })}>
-              삭제
-            </button>
-          </div>
+            })}
+          />
         ))}
         {!periodRules.length ? <div className="emptyBox">이 기간에 등록된 근무 제한이 없습니다.</div> : null}
-      </div>
-    </section>
-  );
-}
-
-function PeriodInspector({
-  shift,
-  assistants,
-  assignments,
-  shifts,
-  config,
-  disabled,
-  onAssign
-}: {
-  shift: ShiftInstance | null;
-  assistants: AssistantProfile[];
-  assignments: AssignmentMap;
-  shifts: ShiftInstance[];
-  config: SchedulerConfig;
-  disabled: boolean;
-  onAssign: (assistantId: string) => void;
-}) {
-  if (!shift) return <section className="panelBlock"><div className="emptyBox">근무 칸을 선택하세요.</div></section>;
-  const assigned = assignments[shift.id];
-  return (
-    <section className="panelBlock">
-      <div className="blockTitle">
-        <h2>후보 조정</h2>
-      </div>
-      <div className="shiftInspector">
-        <strong>{shift.date} {shift.name}</strong>
-        <span>{formatTime(shift.start)}-{formatTime(shift.end)} · {shift.creditHours}h</span>
-        <button type="button" disabled={disabled} className={assigned === UNASSIGNED_ID ? "candidate active" : "candidate"} onClick={() => onAssign(UNASSIGNED_ID)}>
-          미배정
-        </button>
-        {assistants.map((assistant) => {
-          const reason = blockedReason(assistant, shift, config);
-          const sameDay = shifts.some((other) => other.id !== shift.id && other.date === shift.date && assignments[other.id] === assistant.id);
-          const blocked = Boolean(reason || sameDay);
-          return (
-            <button
-              type="button"
-              key={assistant.id}
-              disabled={disabled || blocked}
-              className={assigned === assistant.id ? "candidate active" : "candidate"}
-              onClick={() => onAssign(assistant.id)}
-            >
-              <span>{assistant.name}</span>
-              <small>{blocked ? reason || "같은 날 배정" : "가능"}</small>
-            </button>
-          );
-        })}
       </div>
     </section>
   );
@@ -553,104 +496,4 @@ function prepareConfigForMonth(config: SchedulerConfig, month: string): Schedule
     }));
   });
   return next;
-}
-
-function remapDateToMonth(date: string, month: string) {
-  const day = Number(date.split("-")[2] ?? 1);
-  const [year, monthNumber] = month.split("-").map(Number);
-  const lastDay = new Date(year, monthNumber, 0).getDate();
-  return `${month}-${String(Math.min(Math.max(day, 1), lastDay)).padStart(2, "0")}`;
-}
-
-function countUnavailableInRange(assistant: AssistantProfile, startDate: string, endDate: string) {
-  const [from, to] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate];
-  return (assistant.unavailable_rules ?? []).filter((rule) => rule.date >= from && rule.date <= to).length;
-}
-
-function ruleKind(rule: AvailabilityRule) {
-  if (rule.mode === "all") return "all";
-  const blocked = rule.unavailable_shifts?.[0];
-  return blocked ? `block:${blocked}` : "all";
-}
-
-function buildRuleFromKind(rule: AvailabilityRule, kind: string): AvailabilityRule {
-  if (kind === "all") {
-    return { date: rule.date, mode: "all", reason: rule.reason };
-  }
-  const key = kind.replace("block:", "") as ShiftKey;
-  return { date: rule.date, unavailable_shifts: [key], reason: rule.reason };
-}
-
-function parseBulkUnavailable(text: string, month: string): AvailabilityRule[] {
-  return text
-    .split(/\n+/)
-    .flatMap((line) => parseUnavailableLine(line, month));
-}
-
-function parseUnavailableLine(line: string, month: string): AvailabilityRule[] {
-  const trimmed = line.trim();
-  if (!trimmed) return [];
-  const dates = expandDates(trimmed, month);
-  if (!dates.length) return [];
-
-  const unavailableShifts = Object.entries(shiftLabels)
-    .filter(([key, label]) => trimmed.toLowerCase().includes(key) || trimmed.includes(label))
-    .map(([key]) => key as ShiftKey);
-  const isAllDay = unavailableShifts.length === 0 || trimmed.includes("전체") || trimmed.includes("종일");
-  const reason = trimmed.replace(/\s+/g, " ");
-
-  return dates.map((date) =>
-    isAllDay
-      ? { date, mode: "all", reason }
-      : { date, unavailable_shifts: unavailableShifts, reason }
-  );
-}
-
-function expandDates(text: string, month: string) {
-  const dates = new Set<string>();
-  const rangePattern = /(?:(\d{1,2})[/.])?(\d{1,2})\s*[-~]\s*(?:(\d{1,2})[/.])?(\d{1,2})/g;
-  const isoPattern = /\b\d{4}-\d{2}-(\d{2})\b/g;
-  let sanitized = text;
-
-  for (const match of text.matchAll(isoPattern)) {
-    const date = isoDate(month, Number(match[1]));
-    if (date) dates.add(date);
-    sanitized = sanitized.replace(match[0], " ");
-  }
-
-  for (const match of sanitized.matchAll(rangePattern)) {
-    const startDay = Number(match[2]);
-    const endDay = Number(match[4]);
-    const [from, to] = startDay <= endDay ? [startDay, endDay] : [endDay, startDay];
-    for (let day = from; day <= to; day += 1) {
-      const date = isoDate(month, day);
-      if (date) dates.add(date);
-    }
-    sanitized = sanitized.replace(match[0], " ");
-  }
-
-  const singlePattern = /(?:(\d{1,2})[/.])?(\d{1,2})(?!\s*[:시])/g;
-  for (const match of sanitized.matchAll(singlePattern)) {
-    const day = Number(match[2]);
-    const date = isoDate(month, day);
-    if (date) dates.add(date);
-  }
-
-  return [...dates].sort();
-}
-
-function isoDate(month: string, day: number) {
-  const [year, monthNumber] = month.split("-").map(Number);
-  const lastDay = new Date(year, monthNumber, 0).getDate();
-  if (!year || !monthNumber || day < 1 || day > lastDay) return null;
-  return `${month}-${String(day).padStart(2, "0")}`;
-}
-
-function download(filename: string, blob: Blob) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
 }

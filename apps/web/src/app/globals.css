@@ -329,15 +329,42 @@ h3 {
   min-height: 54px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 9px 10px;
+  gap: 6px;
+  padding: 4px;
   text-align: left;
 }
 
 .assistantItem.active {
   border-color: var(--brand);
   background: rgba(23, 107, 135, 0.09);
+}
+
+.assistantItemMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 6px;
+  text-align: left;
+  border: none;
+  background: transparent;
+}
+
+.assistantItemDelete {
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #c0392b;
+  background: transparent;
+}
+
+.assistantItemDelete:hover {
+  background: rgba(192, 57, 43, 0.08);
+  border-color: #c0392b;
 }
 
 .assistantItem small,
@@ -361,53 +388,151 @@ h3 {
   padding: 10px;
 }
 
-.periodPersonRow {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-}
-
-.periodPersonRow .periodDeleteBtn {
-  flex-shrink: 0;
-  width: 32px;
-  padding: 0;
-  color: var(--bad);
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.periodPersonRow:hover .periodDeleteBtn {
-  opacity: 1;
-}
-
-.periodPerson {
-  flex: 1;
-  min-height: 54px;
+.identityPicker {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: #fff;
-  padding: 9px 10px;
-  text-align: left;
+  gap: 6px;
 }
 
-.periodPerson.active {
-  border-color: var(--brand);
-  background: rgba(23, 107, 135, 0.09);
+.identityPicker span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.periodPerson small {
-  display: block;
-  margin-top: 3px;
+.identityPicker select {
+  width: auto;
+  min-width: 130px;
+}
+
+.collaboratorPanel .blockTitle {
+  align-items: baseline;
+}
+
+.syncStatus {
+  font-weight: 700;
+}
+
+.syncStatus-saving {
+  color: var(--muted);
+}
+
+.syncStatus-saved {
+  color: var(--ok);
+}
+
+.syncStatus-error {
+  color: var(--bad);
+}
+
+.collabBlock + .collabBlock {
+  margin-top: 14px;
+}
+
+.collabBlock h3 {
+  margin-bottom: 8px;
+}
+
+.mutedNote {
   color: var(--muted);
   font-size: 12px;
 }
 
-.periodPerson b {
+.updateBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(200, 100, 61, 0.35);
+  border-radius: 7px;
+  background: rgba(200, 100, 61, 0.09);
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.updateBanner button {
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.presenceList,
+.activityFeed {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.presenceList li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.presenceList li span {
+  color: var(--muted);
+}
+
+.activityFeed {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.activityFeed li {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.activityFeed li:last-child {
+  border-bottom: 0;
+}
+
+.activityTime {
+  color: var(--muted);
+}
+
+.draftPeek {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.draftPeek p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.draftPeek button {
+  justify-self: start;
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.shareSaveButton {
+  width: 100%;
+  border-color: var(--brand);
   color: var(--brand);
+}
+
+.shareSaveButton:hover:not(:disabled) {
+  background: rgba(23, 107, 135, 0.08);
 }
 
 .scheduleHeader {
@@ -527,6 +652,11 @@ h3 {
 .quickInput {
   display: grid;
   gap: 8px;
+}
+
+.parseNotice {
+  color: var(--bad);
+  font-size: 12px;
 }
 
 .quickInput textarea {

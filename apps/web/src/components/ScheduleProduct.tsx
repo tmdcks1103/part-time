@@ -13,10 +13,20 @@ import {
   type SolveResult
 } from "@part-time/scheduler-core";
 import { canManageSchedule, type AppUser } from "@/lib/auth";
-import { applyStoredRoster, type ScheduleVersion } from "@/lib/schedule-store";
-import { dayLabels, download, monthLabel, parseBulkClasses, parseBulkUnavailable, remapDateToMonth } from "@/lib/schedule-format";
+import { applyStoredRoster, loadLastMonth, saveLastMonth } from "@/lib/schedule-store";
+import { dayLabels, download, monthLabel, parseBulkClasses, parseBulkUnavailable, remapConfigMonth } from "@/lib/schedule-format";
 import { useIdentity, type Identity } from "@/lib/identity";
-import { postActivity, useActivityFeed, useDraftPeek, useDraftSave, usePresence, useRosterSync } from "@/lib/collab";
+import {
+  createVersion,
+  formatRelativeTime,
+  postActivity,
+  useActivityFeed,
+  useDraftSync,
+  usePresence,
+  useRosterSync,
+  useVersionHistory,
+  type DraftPayload
+} from "@/lib/collab";
 import { Metric } from "@/components/shared/Metric";
 import { ShiftGrid } from "@/components/shared/ShiftGrid";
 import { ShiftAssignmentPanel } from "@/components/shared/ShiftAssignmentPanel";
@@ -25,11 +35,10 @@ import { CollaboratorPanel, IdentityPicker } from "@/components/shared/Collabora
 
 interface ScheduleProductProps {
   initialConfig: SchedulerConfig;
-  versions: ScheduleVersion[];
   initialUser: AppUser;
 }
 
-export function ScheduleProduct({ initialConfig, versions, initialUser }: ScheduleProductProps) {
+export function ScheduleProduct({ initialConfig, initialUser }: ScheduleProductProps) {
   const [config, setConfig] = useState<SchedulerConfig>(initialConfig);
   const [attempts, setAttempts] = useState(2500);
   const [seed, setSeed] = useState(202606);
@@ -45,6 +54,18 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
     setConfig((current) => applyStoredRoster(current));
   }, []);
 
+  // 새로고침해도 마지막으로 보던 근무월로 돌아오도록 복원한다. localStorage는
+  // 서버 렌더링 시점엔 없으므로 최초 렌더는 항상 시드 데이터의 월로 시작하고(서버와
+  // 동일해야 hydration 불일치가 없다), 마운트된 뒤 이 effect에서만 전환한다.
+  useEffect(() => {
+    const lastMonth = loadLastMonth();
+    if (!lastMonth || lastMonth === initialConfig.month) return;
+    setConfig((current) => remapConfigMonth(current, lastMonth));
+    const numericSeed = Number(lastMonth.replace("-", ""));
+    if (!Number.isNaN(numericSeed)) setSeed(numericSeed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const roster = useRosterSync(
     config.assistants,
     (assistants) => patchConfig((draft) => { draft.assistants = assistants; }),
@@ -52,8 +73,7 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
   );
   const presence = usePresence("month", scopeKey, identity);
   const activity = useActivityFeed(20);
-  const { draft, loading: draftLoading } = useDraftPeek(scopeKey);
-  const { status: draftSaveStatus, save: saveDraft } = useDraftSave(scopeKey, "month");
+  const { versions, refresh: refreshVersions } = useVersionHistory(scopeKey);
 
   const solveResult = useMemo<SolveResult>(() => solveSchedule(config, { attempts, seed }), [config, attempts, seed]);
   const assignments = manualAssignments ?? solveResult.assignments;
@@ -69,10 +89,52 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
   const nightCounts = summary.assistantHours.map((assistant) => assistant.shiftTypes.night ?? 0);
   const nightRange = nightCounts.length ? Math.max(...nightCounts) - Math.min(...nightCounts) : 0;
 
+  const draftPayload: DraftPayload = {
+    settings: {
+      attempts,
+      seed,
+      fairnessToleranceHours: config.rules.fairness_tolerance_hours,
+      ignoreClassConflicts: config.rules.ignore_class_conflicts
+    },
+    manualAssignments: manualAssignments ?? {},
+    summary: {
+      assignedShifts: summary.assignedShifts,
+      totalShifts: summary.totalShifts,
+      unassignedShifts: summary.unassignedShifts,
+      hourRange: summary.hourRange
+    }
+  };
+
+  function applyDraftRemote(settings: Record<string, unknown>, remoteManualAssignments: AssignmentMap) {
+    const typed = settings as { attempts?: number; seed?: number; fairnessToleranceHours?: number; ignoreClassConflicts?: boolean };
+    if (typeof typed.attempts === "number") setAttempts(typed.attempts);
+    if (typeof typed.seed === "number") setSeed(typed.seed);
+    patchConfig((next) => {
+      if (typeof typed.fairnessToleranceHours === "number") next.rules.fairness_tolerance_hours = typed.fairnessToleranceHours;
+      if (typeof typed.ignoreClassConflicts === "boolean") next.rules.ignore_class_conflicts = typed.ignoreClassConflicts;
+    });
+    setManualAssignments(Object.keys(remoteManualAssignments ?? {}).length ? remoteManualAssignments : null);
+  }
+
+  const draftSync = useDraftSync(scopeKey, "month", draftPayload, applyDraftRemote, identity);
+
   function regenerate() {
     setManualAssignments(null);
     setSelectedShiftId(null);
-    if (identity) postActivity(identity, "재생성", undefined, scopeKey);
+    if (identity) {
+      postActivity(identity, "재생성", undefined, scopeKey);
+      createVersion(scopeKey, "month", "재생성", { ...draftPayload, manualAssignments: {} }, identity).then(refreshVersions);
+    }
+  }
+
+  function saveVersion() {
+    if (!identity) return;
+    createVersion(scopeKey, "month", "수동 저장", draftPayload, identity).then(refreshVersions);
+  }
+
+  function loadVersion(version: { settings: Record<string, unknown>; manual_assignments: AssignmentMap; label: string; created_by: string }) {
+    applyDraftRemote(version.settings, version.manual_assignments);
+    if (identity) postActivity(identity, "이전 버전 불러오기", `${version.label} (${version.created_by})`, scopeKey);
   }
 
   function patchConfig(updater: (draft: SchedulerConfig) => void) {
@@ -85,18 +147,10 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
   }
 
   function updateMonth(month: string) {
-    patchConfig((draft) => {
-      draft.month = month;
-      draft.title = `${monthLabel(month)} 조교 근무표`;
-      draft.assistants.forEach((assistant) => {
-        assistant.unavailable_rules = (assistant.unavailable_rules ?? []).map((rule) => ({
-          ...rule,
-          date: remapDateToMonth(rule.date, month)
-        }));
-      });
-    });
+    patchConfig((draft) => Object.assign(draft, remapConfigMonth(draft, month)));
     const numericSeed = Number(month.replace("-", ""));
     if (!Number.isNaN(numericSeed)) setSeed(numericSeed);
+    saveLastMonth(month);
     if (identity) postActivity(identity, "근무월 변경", month, scopeKey);
   }
 
@@ -131,41 +185,6 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
       .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
       .join("\n");
     download(`${config.month.replace("-", "_")}_schedule.csv`, new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
-  }
-
-  function handleSaveDraft() {
-    if (!identity) return;
-    saveDraft(
-      {
-        settings: {
-          attempts,
-          seed,
-          fairnessToleranceHours: config.rules.fairness_tolerance_hours,
-          ignoreClassConflicts: config.rules.ignore_class_conflicts
-        },
-        manualAssignments: assignments,
-        summary: {
-          assignedShifts: summary.assignedShifts,
-          totalShifts: summary.totalShifts,
-          unassignedShifts: summary.unassignedShifts,
-          hourRange: summary.hourRange
-        }
-      },
-      identity
-    );
-  }
-
-  function handleLoadDraft() {
-    if (!draft) return;
-    const settings = draft.settings as { attempts?: number; seed?: number; fairnessToleranceHours?: number; ignoreClassConflicts?: boolean };
-    if (typeof settings.attempts === "number") setAttempts(settings.attempts);
-    if (typeof settings.seed === "number") setSeed(settings.seed);
-    patchConfig((next) => {
-      if (typeof settings.fairnessToleranceHours === "number") next.rules.fairness_tolerance_hours = settings.fairnessToleranceHours;
-      if (typeof settings.ignoreClassConflicts === "boolean") next.rules.ignore_class_conflicts = settings.ignoreClassConflicts;
-    });
-    setManualAssignments(draft.manualAssignments);
-    if (identity) postActivity(identity, "동료 버전 불러오기", `${draft.updatedBy}님 저장본`, scopeKey);
   }
 
   return (
@@ -209,11 +228,11 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
             rosterStatus={roster.status}
             rosterUpdateAvailable={roster.updateAvailable}
             onReloadRoster={roster.reloadFromServer}
-            draft={draft}
-            draftLoading={draftLoading}
-            draftStatus={draftSaveStatus}
-            onSaveDraft={handleSaveDraft}
-            onLoadDraft={handleLoadDraft}
+            draftStatus={draftSync.status}
+            draftUpdateAvailable={draftSync.updateAvailable}
+            onReloadDraft={draftSync.reloadFromServer}
+            draftRemoteMeta={draftSync.remoteMeta}
+            summary={summary}
             identityMissing={!identity}
           />
 
@@ -284,14 +303,22 @@ export function ScheduleProduct({ initialConfig, versions, initialUser }: Schedu
           <section className="panelBlock">
             <div className="blockTitle">
               <h2>버전</h2>
+              {managerMode ? <button type="button" disabled={!identity} onClick={saveVersion}>새 버전으로 저장</button> : null}
             </div>
             <div className="versionList">
-              {versions.map((version) => (
-                <div key={version.id} className="versionItem">
-                  <strong>{version.label}</strong>
-                  <span>{version.createdBy}</span>
-                </div>
-              ))}
+              {versions.length ? (
+                versions.map((version) => (
+                  <div key={version.id} className="versionItem">
+                    <div>
+                      <strong>{version.label}</strong>
+                      <span>{version.created_by} · {formatRelativeTime(version.created_at)}</span>
+                    </div>
+                    <button type="button" disabled={!managerMode} onClick={() => loadVersion(version)}>불러오기</button>
+                  </div>
+                ))
+              ) : (
+                <div className="emptyBox">아직 저장된 버전이 없습니다.</div>
+              )}
             </div>
           </section>
         </aside>

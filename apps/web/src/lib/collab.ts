@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AssignmentMap, AssistantProfile } from "@part-time/scheduler-core";
 import type { Identity } from "@/lib/identity";
-import { loadRosterLocalEditAt, markRosterEditedNow, saveStoredRoster } from "@/lib/schedule-store";
+import { loadLocalEditAt, loadRosterLocalEditAt, markEditedNow, markRosterEditedNow, saveStoredRoster } from "@/lib/schedule-store";
 
 export type SyncStatus = "idle" | "saving" | "saved" | "error";
 
@@ -182,8 +182,8 @@ export interface DraftInfo {
   settings: Record<string, unknown>;
   manualAssignments: AssignmentMap;
   summary: Record<string, unknown> | null;
-  updatedBy: string;
-  updatedAt: string;
+  updatedBy: string | null;
+  updatedAt: string | null;
 }
 
 async function fetchDraft(scopeKey: string): Promise<DraftInfo | null> {
@@ -191,7 +191,7 @@ async function fetchDraft(scopeKey: string): Promise<DraftInfo | null> {
     const res = await fetch(`/api/drafts?scope=${encodeURIComponent(scopeKey)}`, { cache: "no-store" });
     if (!res.ok) return null;
     const data = await res.json();
-    if (!data.draft) return null;
+    if (!data.draft) return { settings: {}, manualAssignments: {}, summary: null, updatedBy: null, updatedAt: null };
     return {
       settings: data.draft.settings ?? {},
       manualAssignments: data.draft.manual_assignments ?? {},
@@ -204,7 +204,7 @@ async function fetchDraft(scopeKey: string): Promise<DraftInfo | null> {
   }
 }
 
-async function saveDraftRequest(scopeKey: string, kind: "month" | "period", payload: DraftPayload, identity: Identity) {
+async function saveDraftRequest(scopeKey: string, kind: "month" | "period", payload: DraftPayload, identity: Identity): Promise<{ updatedAt: string } | null> {
   try {
     const res = await fetch("/api/drafts", {
       method: "PUT",
@@ -219,55 +219,248 @@ async function saveDraftRequest(scopeKey: string, kind: "month" | "period", payl
         actorRole: identity.role
       })
     });
-    return res.ok;
+    if (!res.ok) return null;
+    return (await res.json()) as { updatedAt: string };
   } catch {
-    return false;
+    return null;
   }
 }
 
+const AUTO_VERSION_INTERVAL_MS = 10 * 60 * 1000; // 활동 중인 스코프마다 최소 10분 간격으로만 자동 체크포인트를 남긴다.
+
+function lastAutoVersionKey(scopeKey: string) {
+  return `part-time:last-auto-version:${scopeKey}`;
+}
+
 /**
- * Tracks the latest server-saved draft for one scope (a month or a date range) so the
- * UI can show "who last saved this and what it looked like" without silently overwriting
- * whatever the current user is actively editing.
+ * Creates an append-only checkpoint in schedule_versions so the "버전" list has real
+ * history to show and restore, distinct from schedule_drafts (the single continuously
+ * autosaved "current" row).
  */
-export function useDraftPeek(scopeKey: string) {
-  const [draft, setDraft] = useState<DraftInfo | null>(null);
-  const [loading, setLoading] = useState(true);
+export function createVersion(scopeKey: string, kind: "month" | "period", label: string, payload: DraftPayload, identity: Identity) {
+  return fetch("/api/versions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      scopeKey,
+      kind,
+      label,
+      settings: payload.settings,
+      manualAssignments: payload.manualAssignments,
+      summary: payload.summary,
+      actorName: identity.name,
+      actorRole: identity.role
+    })
+  })
+    .then((res) => res.ok)
+    .catch(() => false);
+}
+
+function maybeAutoCheckpoint(scopeKey: string, kind: "month" | "period", payload: DraftPayload, identity: Identity) {
+  if (typeof window === "undefined") return;
+  try {
+    const lastAt = window.localStorage.getItem(lastAutoVersionKey(scopeKey));
+    if (lastAt && Date.now() - new Date(lastAt).getTime() < AUTO_VERSION_INTERVAL_MS) return;
+    window.localStorage.setItem(lastAutoVersionKey(scopeKey), new Date().toISOString());
+  } catch {
+    // 자동 체크포인트 주기 기록에 실패해도 자동저장 자체는 계속 동작해야 하므로 무시한다.
+  }
+  createVersion(scopeKey, kind, "자동 저장", payload, identity);
+}
+
+/**
+ * Keeps solver settings (attempts/seed/fairness rules) and manual shift overrides for one
+ * scope (a month or a date range) in sync with the shared server copy — the same
+ * hydrate → debounced autosave → flush-on-navigate-away pattern as useRosterSync, so a
+ * schedule someone is actively shaping survives a reload or a screen switch instead of
+ * always resetting to hardcoded defaults.
+ */
+export function useDraftSync(
+  scopeKey: string,
+  kind: "month" | "period",
+  payload: DraftPayload,
+  applyRemote: (settings: Record<string, unknown>, manualAssignments: AssignmentMap) => void,
+  identity: Identity | null
+) {
+  const hydrated = useRef(false);
+  const hydratedScope = useRef<string | null>(null);
+  const skipNextSave = useRef(false);
+  const remoteMeta = useRef<{ updatedAt: string | null; updatedBy: string | null }>({ updatedAt: null, updatedBy: null });
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dirty = useRef(false);
+  const pending = useRef<{ payload: DraftPayload; identity: Identity } | null>(null);
+  const [status, setStatus] = useState<SyncStatus>("idle");
+  const [updateAvailable, setUpdateAvailable] = useState<{ updatedBy: string } | null>(null);
+  // 하이드레이션이 끝난 시점을 렌더에 반영하기 위한 값. ref만 갱신하면(hydrated.current 등)
+  // 리렌더가 일어나지 않아 아래 저장 effect가 다시 평가되지 않는다. 예를 들어 기간 화면의
+  // 시작일을 바꾸면 scopeKey 자체가 바뀌는데, 그 직후 추가 편집 없이는 새 스코프에 대한
+  // 하이드레이션 완료가 저장 effect를 다시 트리거하지 못해 방금 바꾼 값이 저장되지 않는다.
+  const [hydrationTick, setHydrationTick] = useState(0);
+  const payloadKey = JSON.stringify(payload);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    hydrated.current = false;
+    setUpdateAvailable(null);
     (async () => {
-      const result = await fetchDraft(scopeKey);
-      if (!cancelled) {
-        setDraft(result);
-        setLoading(false);
+      const remote = await fetchDraft(scopeKey);
+      if (cancelled) return;
+      const localEditAt = loadLocalEditAt(scopeKey);
+      const remoteIsStale = Boolean(localEditAt) && (!remote?.updatedAt || remote.updatedAt < localEditAt!);
+      if (remote && remote.updatedAt && !remoteIsStale) {
+        skipNextSave.current = true;
+        applyRemote(remote.settings, remote.manualAssignments);
+        remoteMeta.current = { updatedAt: remote.updatedAt, updatedBy: remote.updatedBy };
+      } else if (remote) {
+        remoteMeta.current = { updatedAt: remote.updatedAt, updatedBy: remote.updatedBy };
       }
+      hydrated.current = true;
+      hydratedScope.current = scopeKey;
+      setHydrationTick((tick) => tick + 1);
     })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
+
+  useEffect(() => {
+    if (!hydrated.current || hydratedScope.current !== scopeKey) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+    if (!identity) return;
+    dirty.current = true;
+    pending.current = { payload, identity };
+    markEditedNow(scopeKey);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      saveTimer.current = null;
+      dirty.current = false;
+      setStatus("saving");
+      const result = await saveDraftRequest(scopeKey, kind, payload, identity);
+      if (result) {
+        remoteMeta.current = { updatedAt: result.updatedAt, updatedBy: identity.name };
+        setStatus("saved");
+        maybeAutoCheckpoint(scopeKey, kind, payload, identity);
+      } else {
+        setStatus("error");
+      }
+    }, 1000);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payloadKey, scopeKey, identity, hydrationTick]);
+
+  useEffect(() => {
+    function flush() {
+      if (!dirty.current || !pending.current) return;
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      const { payload: pendingPayload, identity: pendingIdentity } = pending.current;
+      dirty.current = false;
+      fetch("/api/drafts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({
+          scopeKey,
+          kind,
+          settings: pendingPayload.settings,
+          manualAssignments: pendingPayload.manualAssignments,
+          summary: pendingPayload.summary,
+          actorName: pendingIdentity.name,
+          actorRole: pendingIdentity.role
+        })
+      }).catch(() => {
+        // 페이지 이탈 중 발생하는 실패는 표시할 화면이 이미 없으므로 조용히 무시한다.
+      });
+    }
+    function onVisibilityChange() {
+      if (document.visibilityState === "hidden") flush();
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
+
+  useEffect(() => {
     const timer = setInterval(async () => {
-      const result = await fetchDraft(scopeKey);
-      if (!cancelled) setDraft(result);
+      const remote = await fetchDraft(scopeKey);
+      if (!remote?.updatedAt || !remote.updatedBy) return;
+      if (remote.updatedAt !== remoteMeta.current.updatedAt && remote.updatedBy !== identity?.name) {
+        setUpdateAvailable({ updatedBy: remote.updatedBy });
+      }
     }, 25000);
+    return () => clearInterval(timer);
+  }, [scopeKey, identity?.name]);
+
+  async function reloadFromServer() {
+    const remote = await fetchDraft(scopeKey);
+    if (remote) {
+      skipNextSave.current = true;
+      applyRemote(remote.settings, remote.manualAssignments);
+      remoteMeta.current = { updatedAt: remote.updatedAt, updatedBy: remote.updatedBy };
+    }
+    setUpdateAvailable(null);
+  }
+
+  return { status, updateAvailable, reloadFromServer, remoteMeta: remoteMeta.current };
+}
+
+export interface ScheduleVersionRow {
+  id: number;
+  scope_key: string;
+  kind: string;
+  label: string;
+  settings: Record<string, unknown>;
+  manual_assignments: AssignmentMap;
+  summary: Record<string, unknown> | null;
+  created_by: string;
+  created_at: string;
+}
+
+/**
+ * Lists the append-only version history for one scope, for the "버전" panel.
+ */
+export function useVersionHistory(scopeKey: string, limit = 20) {
+  const [versions, setVersions] = useState<ScheduleVersionRow[]>([]);
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch(`/api/versions?scope=${encodeURIComponent(scopeKey)}&limit=${limit}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setVersions(data.versions ?? []);
+      } catch {
+        // ignore
+      }
+    }
+    load();
+    const timer = setInterval(load, 30000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [scopeKey]);
+  }, [scopeKey, limit, refreshToken]);
 
-  return { draft, loading };
-}
-
-export function useDraftSave(scopeKey: string, kind: "month" | "period") {
-  const [status, setStatus] = useState<SyncStatus>("idle");
-
-  async function save(payload: DraftPayload, identity: Identity) {
-    setStatus("saving");
-    const ok = await saveDraftRequest(scopeKey, kind, payload, identity);
-    setStatus(ok ? "saved" : "error");
-    return ok;
+  function refresh() {
+    setRefreshToken((value) => value + 1);
   }
 
-  return { status, save };
+  return { versions, refresh };
 }
 
 export interface PresenceRow {

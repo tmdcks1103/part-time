@@ -5,11 +5,5 @@ import { getInitialWorkspace } from "@/lib/schedule-store";
 export default function Page() {
   const workspace = getInitialWorkspace();
 
-  return (
-    <ScheduleProduct
-      initialConfig={workspace.config}
-      versions={workspace.versions}
-      initialUser={getDemoUser("scheduler")}
-    />
-  );
+  return <ScheduleProduct initialConfig={workspace.config} initialUser={getDemoUser("scheduler")} />;
 }

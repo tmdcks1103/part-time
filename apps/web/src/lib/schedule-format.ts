@@ -1,4 +1,4 @@
-import type { AssistantProfile, AvailabilityRule, ShiftKey } from "@part-time/scheduler-core";
+import type { AssistantProfile, AvailabilityRule, SchedulerConfig, ShiftKey } from "@part-time/scheduler-core";
 
 export const shiftLabels: Record<string, string> = {
   open: "오픈",
@@ -31,6 +31,19 @@ export function remapDateToMonth(date: string, month: string) {
   const [year, monthNumber] = month.split("-").map(Number);
   const lastDay = new Date(year, monthNumber, 0).getDate();
   return `${month}-${String(Math.min(Math.max(day, 1), lastDay)).padStart(2, "0")}`;
+}
+
+export function remapConfigMonth(config: SchedulerConfig, month: string): SchedulerConfig {
+  const next = structuredClone(config);
+  next.month = month;
+  next.title = `${monthLabel(month)} 조교 근무표`;
+  next.assistants.forEach((assistant) => {
+    assistant.unavailable_rules = (assistant.unavailable_rules ?? []).map((rule) => ({
+      ...rule,
+      date: remapDateToMonth(rule.date, month)
+    }));
+  });
+  return next;
 }
 
 export function isoDate(month: string, day: number) {

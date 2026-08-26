@@ -13,10 +13,20 @@ import {
   type SolveResult
 } from "@part-time/scheduler-core";
 import { canManageSchedule, type AppUser } from "@/lib/auth";
-import { applyStoredRoster } from "@/lib/schedule-store";
+import { applyStoredRoster, loadLastPeriod, saveLastPeriod } from "@/lib/schedule-store";
 import { countUnavailableInRange, download, parseBulkUnavailable, remapDateToMonth } from "@/lib/schedule-format";
 import { useIdentity } from "@/lib/identity";
-import { postActivity, useActivityFeed, useDraftPeek, useDraftSave, usePresence, useRosterSync } from "@/lib/collab";
+import {
+  createVersion,
+  formatRelativeTime,
+  postActivity,
+  useActivityFeed,
+  useDraftSync,
+  usePresence,
+  useRosterSync,
+  useVersionHistory,
+  type DraftPayload
+} from "@/lib/collab";
 import { Metric } from "@/components/shared/Metric";
 import { ShiftGrid } from "@/components/shared/ShiftGrid";
 import { ShiftAssignmentPanel } from "@/components/shared/ShiftAssignmentPanel";
@@ -48,6 +58,24 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
     setConfig((current) => applyStoredRoster(current));
   }, []);
 
+  // 새로고침해도 마지막으로 보던 기간으로 돌아오도록 복원한다. localStorage는 서버
+  // 렌더링 시점엔 없으므로 최초 렌더는 항상 하드코딩된 기본 기간으로 시작하고(서버와
+  // 동일해야 hydration 불일치가 없다), 마운트된 뒤 이 effect에서만 전환한다.
+  useEffect(() => {
+    const stored = loadLastPeriod();
+    if (!stored || (stored.startDate === defaultStartDate && stored.endDate === defaultEndDate)) return;
+    setStartDate(stored.startDate);
+    setEndDate(stored.endDate);
+    setConfig((current) => prepareConfigForMonth(current, stored.startDate.slice(0, 7)));
+    const numericSeed = Number(stored.startDate.slice(0, 7).replace("-", ""));
+    if (!Number.isNaN(numericSeed)) setSeed(numericSeed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    saveLastPeriod(startDate, endDate);
+  }, [startDate, endDate]);
+
   const roster = useRosterSync(
     config.assistants,
     (assistants) => patchConfig((draft) => { draft.assistants = assistants; }),
@@ -55,8 +83,7 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
   );
   const presence = usePresence("period", scopeKey, identity);
   const activity = useActivityFeed(20);
-  const { draft, loading: draftLoading } = useDraftPeek(scopeKey);
-  const { status: draftSaveStatus, save: saveDraft } = useDraftSave(scopeKey, "period");
+  const { versions, refresh: refreshVersions } = useVersionHistory(scopeKey);
 
   const managerMode = canManageSchedule(initialUser.role);
   const solveResult = useMemo<SolveResult>(
@@ -73,6 +100,56 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
   const selectedShift = solveResult.shifts.find((shift) => shift.id === selectedShiftId) ?? null;
   const nightCounts = summary.assistantHours.map((assistant) => assistant.shiftTypes.night ?? 0);
   const nightRange = nightCounts.length ? Math.max(...nightCounts) - Math.min(...nightCounts) : 0;
+
+  const draftPayload: DraftPayload = {
+    settings: {
+      attempts,
+      seed,
+      fairnessToleranceHours: config.rules.fairness_tolerance_hours,
+      ignoreClassConflicts: config.rules.ignore_class_conflicts,
+      startDate,
+      endDate
+    },
+    manualAssignments: manualAssignments ?? {},
+    summary: {
+      assignedShifts: summary.assignedShifts,
+      totalShifts: summary.totalShifts,
+      unassignedShifts: summary.unassignedShifts,
+      hourRange: summary.hourRange
+    }
+  };
+
+  function applyDraftRemote(settings: Record<string, unknown>, remoteManualAssignments: AssignmentMap) {
+    const typed = settings as {
+      attempts?: number;
+      seed?: number;
+      fairnessToleranceHours?: number;
+      ignoreClassConflicts?: boolean;
+      startDate?: string;
+      endDate?: string;
+    };
+    if (typeof typed.attempts === "number") setAttempts(typed.attempts);
+    if (typeof typed.seed === "number") setSeed(typed.seed);
+    if (typed.startDate) setStartDate(typed.startDate);
+    if (typed.endDate) setEndDate(typed.endDate);
+    patchConfig((next) => {
+      if (typeof typed.fairnessToleranceHours === "number") next.rules.fairness_tolerance_hours = typed.fairnessToleranceHours;
+      if (typeof typed.ignoreClassConflicts === "boolean") next.rules.ignore_class_conflicts = typed.ignoreClassConflicts;
+    });
+    setManualAssignments(Object.keys(remoteManualAssignments ?? {}).length ? remoteManualAssignments : null);
+  }
+
+  const draftSync = useDraftSync(scopeKey, "period", draftPayload, applyDraftRemote, identity);
+
+  function saveVersion() {
+    if (!identity) return;
+    createVersion(scopeKey, "period", "수동 저장", draftPayload, identity).then(refreshVersions);
+  }
+
+  function loadVersion(version: { settings: Record<string, unknown>; manual_assignments: AssignmentMap; label: string; created_by: string }) {
+    applyDraftRemote(version.settings, version.manual_assignments);
+    if (identity) postActivity(identity, "이전 버전 불러오기", `${version.label} (${version.created_by})`, scopeKey);
+  }
 
   function patchConfig(updater: (draft: SchedulerConfig) => void) {
     setConfig((current) => {
@@ -115,7 +192,10 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
   function regenerate() {
     setManualAssignments(null);
     setSelectedShiftId(null);
-    if (identity) postActivity(identity, "재생성", undefined, scopeKey);
+    if (identity) {
+      postActivity(identity, "재생성", undefined, scopeKey);
+      createVersion(scopeKey, "period", "재생성", { ...draftPayload, manualAssignments: {} }, identity).then(refreshVersions);
+    }
   }
 
   function exportJson() {
@@ -141,52 +221,6 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
       .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
       .join("\n");
     download(`${startDate}_${endDate}_period_schedule.csv`, new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
-  }
-
-  function handleSaveDraft() {
-    if (!identity) return;
-    saveDraft(
-      {
-        settings: {
-          attempts,
-          seed,
-          fairnessToleranceHours: config.rules.fairness_tolerance_hours,
-          ignoreClassConflicts: config.rules.ignore_class_conflicts,
-          startDate,
-          endDate
-        },
-        manualAssignments: assignments,
-        summary: {
-          assignedShifts: summary.assignedShifts,
-          totalShifts: summary.totalShifts,
-          unassignedShifts: summary.unassignedShifts,
-          hourRange: summary.hourRange
-        }
-      },
-      identity
-    );
-  }
-
-  function handleLoadDraft() {
-    if (!draft) return;
-    const settings = draft.settings as {
-      attempts?: number;
-      seed?: number;
-      fairnessToleranceHours?: number;
-      ignoreClassConflicts?: boolean;
-      startDate?: string;
-      endDate?: string;
-    };
-    if (typeof settings.attempts === "number") setAttempts(settings.attempts);
-    if (typeof settings.seed === "number") setSeed(settings.seed);
-    if (settings.startDate) setStartDate(settings.startDate);
-    if (settings.endDate) setEndDate(settings.endDate);
-    patchConfig((next) => {
-      if (typeof settings.fairnessToleranceHours === "number") next.rules.fairness_tolerance_hours = settings.fairnessToleranceHours;
-      if (typeof settings.ignoreClassConflicts === "boolean") next.rules.ignore_class_conflicts = settings.ignoreClassConflicts;
-    });
-    setManualAssignments(draft.manualAssignments);
-    if (identity) postActivity(identity, "동료 버전 불러오기", `${draft.updatedBy}님 저장본`, scopeKey);
   }
 
   return (
@@ -221,11 +255,11 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
             rosterStatus={roster.status}
             rosterUpdateAvailable={roster.updateAvailable}
             onReloadRoster={roster.reloadFromServer}
-            draft={draft}
-            draftLoading={draftLoading}
-            draftStatus={draftSaveStatus}
-            onSaveDraft={handleSaveDraft}
-            onLoadDraft={handleLoadDraft}
+            draftStatus={draftSync.status}
+            draftUpdateAvailable={draftSync.updateAvailable}
+            onReloadDraft={draftSync.reloadFromServer}
+            draftRemoteMeta={draftSync.remoteMeta}
+            summary={summary}
             identityMissing={!identity}
           />
 
@@ -324,6 +358,28 @@ export function PeriodScheduleProduct({ initialConfig, initialUser }: PeriodSche
                   </div>
                 );
               })}
+            </div>
+          </section>
+
+          <section className="panelBlock">
+            <div className="blockTitle">
+              <h2>버전</h2>
+              {managerMode ? <button type="button" disabled={!identity} onClick={saveVersion}>새 버전으로 저장</button> : null}
+            </div>
+            <div className="versionList">
+              {versions.length ? (
+                versions.map((version) => (
+                  <div key={version.id} className="versionItem">
+                    <div>
+                      <strong>{version.label}</strong>
+                      <span>{version.created_by} · {formatRelativeTime(version.created_at)}</span>
+                    </div>
+                    <button type="button" disabled={!managerMode} onClick={() => loadVersion(version)}>불러오기</button>
+                  </div>
+                ))
+              ) : (
+                <div className="emptyBox">아직 저장된 버전이 없습니다.</div>
+              )}
             </div>
           </section>
 

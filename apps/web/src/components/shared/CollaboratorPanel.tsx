@@ -2,7 +2,6 @@ import { suggestedIdentities, type Identity } from "@/lib/identity";
 import {
   formatRelativeTime,
   type ActivityEntry,
-  type DraftInfo,
   type PresenceRow,
   type SyncStatus
 } from "@/lib/collab";
@@ -49,11 +48,11 @@ export function CollaboratorPanel({
   rosterStatus,
   rosterUpdateAvailable,
   onReloadRoster,
-  draft,
-  draftLoading,
   draftStatus,
-  onSaveDraft,
-  onLoadDraft,
+  draftUpdateAvailable,
+  onReloadDraft,
+  draftRemoteMeta,
+  summary,
   identityMissing
 }: {
   online: PresenceRow[];
@@ -61,11 +60,11 @@ export function CollaboratorPanel({
   rosterStatus: SyncStatus;
   rosterUpdateAvailable: { updatedBy: string } | null;
   onReloadRoster: () => void;
-  draft: DraftInfo | null;
-  draftLoading: boolean;
   draftStatus: SyncStatus;
-  onSaveDraft: () => void;
-  onLoadDraft: () => void;
+  draftUpdateAvailable: { updatedBy: string } | null;
+  onReloadDraft: () => void;
+  draftRemoteMeta: { updatedAt: string | null; updatedBy: string | null };
+  summary?: { assignedShifts: number; totalShifts: number };
   identityMissing: boolean;
 }) {
   return (
@@ -83,6 +82,15 @@ export function CollaboratorPanel({
         <div className="updateBanner">
           <span>{rosterUpdateAvailable.updatedBy}님이 조교 명단을 방금 수정했습니다.</span>
           <button type="button" onClick={onReloadRoster}>
+            반영하기
+          </button>
+        </div>
+      ) : null}
+
+      {draftUpdateAvailable ? (
+        <div className="updateBanner">
+          <span>{draftUpdateAvailable.updatedBy}님이 이 근무표를 방금 저장했습니다.</span>
+          <button type="button" onClick={onReloadDraft}>
             반영하기
           </button>
         </div>
@@ -106,26 +114,16 @@ export function CollaboratorPanel({
 
       <div className="collabBlock">
         <h3>이 근무표 근황</h3>
-        {draftLoading ? (
-          <p className="mutedNote">불러오는 중…</p>
-        ) : draft ? (
-          <div className="draftPeek">
-            <p>
-              <strong>{draft.updatedBy}</strong>님이 {formatRelativeTime(draft.updatedAt)} 저장
-              {draft.summary && typeof draft.summary.assignedShifts === "number" ? (
-                <> · 배정 {String(draft.summary.assignedShifts)}/{String(draft.summary.totalShifts)}</>
-              ) : null}
-            </p>
-            <button type="button" onClick={onLoadDraft}>
-              이 버전 불러오기
-            </button>
-          </div>
+        {draftRemoteMeta.updatedAt ? (
+          <p className="mutedNote">
+            {draftRemoteMeta.updatedBy ? <>{draftRemoteMeta.updatedBy}님이 </> : null}
+            {formatRelativeTime(draftRemoteMeta.updatedAt)} 자동 저장됨
+            {summary ? <> · 배정 {summary.assignedShifts}/{summary.totalShifts}</> : null}
+            {draftStatus === "saving" ? " · 저장 중…" : null}
+          </p>
         ) : (
-          <p className="mutedNote">아직 서버에 공유 저장된 버전이 없습니다.</p>
+          <p className="mutedNote">편집하면 자동으로 저장됩니다.{summary ? ` (현재 배정 ${summary.assignedShifts}/${summary.totalShifts})` : ""}</p>
         )}
-        <button type="button" className="shareSaveButton" disabled={identityMissing || draftStatus === "saving"} onClick={onSaveDraft}>
-          {draftStatus === "saving" ? "저장 중…" : "지금 상태 동료와 공유 저장"}
-        </button>
       </div>
 
       <div className="collabBlock">

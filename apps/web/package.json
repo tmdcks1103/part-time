@@ -12,6 +12,7 @@
   "dependencies": {
     "@part-time/scheduler-core": "file:../../packages/scheduler-core",
     "next": "latest",
+    "postgres": "^3.4.9",
     "react": "latest",
     "react-dom": "latest",
     "zod": "^3.25.17"

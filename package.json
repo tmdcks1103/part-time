@@ -10,9 +10,14 @@
     "dev": "npm run dev -w apps/web",
     "build": "npm run build -w apps/web",
     "typecheck": "npm run typecheck -w packages/scheduler-core && npm run typecheck -w apps/web",
-    "lint": "npm run lint -w apps/web"
+    "lint": "npm run lint -w apps/web",
+    "test": "node --import ./tests/register.mjs --test tests/*.test.ts",
+    "test:e2e": "node tests/browser.mjs"
   },
   "dependencies": {
     "@part-time/scheduler-core": "file:packages/scheduler-core"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
   }
 }

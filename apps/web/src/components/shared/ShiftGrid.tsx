@@ -1,14 +1,20 @@
-import { formatTime, type AssignmentMap, type AssistantProfile, type ShiftInstance } from "@part-time/scheduler-core";
+import { memo, useMemo } from "react";
+import {
+  formatTime,
+  type AssignmentMap,
+  type AssistantProfile,
+  type ShiftInstance,
+} from "@part-time/scheduler-core";
 
 const shiftColumns = ["open", "middle", "close", "night"];
 
-export function ShiftGrid({
+export const ShiftGrid = memo(function ShiftGrid({
   shifts,
   assignments,
   assistants,
   selectedShiftId,
   onSelectShift,
-  scrollerClassName
+  scrollerClassName,
 }: {
   shifts: ShiftInstance[];
   assignments: AssignmentMap;
@@ -17,16 +23,33 @@ export function ShiftGrid({
   onSelectShift: (id: string) => void;
   scrollerClassName?: string;
 }) {
-  const assistantsById = Object.fromEntries(assistants.map((assistant) => [assistant.id, assistant]));
-  const grouped = shifts.reduce<Record<string, ShiftInstance[]>>((acc, shift) => {
-    acc[shift.date] ??= [];
-    acc[shift.date].push(shift);
-    return acc;
-  }, {});
+  const assistantsById = useMemo(
+    () =>
+      Object.fromEntries(
+        assistants.map((assistant) => [assistant.id, assistant]),
+      ),
+    [assistants],
+  );
+  const grouped = useMemo(
+    () =>
+      shifts.reduce<Record<string, ShiftInstance[]>>((acc, shift) => {
+        acc[shift.date] ??= [];
+        acc[shift.date].push(shift);
+        return acc;
+      }, {}),
+    [shifts],
+  );
 
   return (
-    <div className={scrollerClassName ? `tableScroller ${scrollerClassName}` : "tableScroller"}>
+    <div
+      className={
+        scrollerClassName
+          ? `tableScroller ${scrollerClassName}`
+          : "tableScroller"
+      }
+    >
       <table className="scheduleTable">
+        <caption>날짜별 조교 근무 배정</caption>
         <thead>
           <tr>
             <th>날짜</th>
@@ -38,9 +61,14 @@ export function ShiftGrid({
         </thead>
         <tbody>
           {Object.entries(grouped).map(([date, dateShifts]) => (
-            <tr key={date}>
+            <tr
+              key={date}
+              className={
+                dateShifts[0]?.dayKind === "weekend" ? "weekend" : undefined
+              }
+            >
               <th className="dateCell">
-                {date.slice(5)}
+                {Number(date.slice(8))}
                 <small>{dateShifts[0]?.dayName}</small>
               </th>
               {shiftColumns.map((key) => {
@@ -54,14 +82,17 @@ export function ShiftGrid({
                       className={[
                         "shiftCard",
                         shift.id === selectedShiftId ? "selected" : "",
-                        !assistant ? "unassigned" : ""
+                        !assistant ? "unassigned" : "",
                       ].join(" ")}
                       aria-pressed={shift.id === selectedShiftId}
                       aria-label={`${date} ${shift.name} · ${assistant?.name ?? "미배정"}`}
                       onClick={() => onSelectShift(shift.id)}
                     >
                       <strong>{assistant?.short_name ?? "미배정"}</strong>
-                      <small>{formatTime(shift.start)}-{formatTime(shift.end)} · {shift.creditHours}h</small>
+                      <small>
+                        {formatTime(shift.start)}-{formatTime(shift.end)} ·{" "}
+                        {shift.creditHours}h
+                      </small>
                     </button>
                   </td>
                 );
@@ -72,4 +103,4 @@ export function ShiftGrid({
       </table>
     </div>
   );
-}
+});

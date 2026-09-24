@@ -4,575 +4,801 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   formatTime,
-  solveSchedule,
   summarize,
   validate,
-  type AssistantProfile,
   type AssignmentMap,
   type SchedulerConfig,
-  type SolveResult
 } from "@part-time/scheduler-core";
 import { canManageSchedule, type AppUser } from "@/lib/auth";
-import { applyStoredRoster, loadLastMonth, saveLastMonth } from "@/lib/schedule-store";
-import { dayLabels, download, monthLabel, parseBulkClasses, parseBulkUnavailable, remapConfigMonth } from "@/lib/schedule-format";
-import { useIdentity, type Identity } from "@/lib/identity";
+import {
+  applyStoredRoster,
+  loadLastMonth,
+  loadLastPeriod,
+  saveLastMonth,
+  saveLastPeriod,
+} from "@/lib/schedule-store";
+import { download, monthLabel, remapConfigMonth } from "@/lib/schedule-format";
+import { useIdentity } from "@/lib/identity";
 import {
   createVersion,
   formatRelativeTime,
-  postActivity,
-  useActivityFeed,
   useDraftSync,
-  usePresence,
   useRosterSync,
   useVersionHistory,
-  type DraftPayload
+  type DraftPayload,
 } from "@/lib/collab";
-import { Metric } from "@/components/shared/Metric";
-import { ShiftGrid } from "@/components/shared/ShiftGrid";
-import { ShiftAssignmentPanel } from "@/components/shared/ShiftAssignmentPanel";
-import { UnavailableRuleRow } from "@/components/shared/UnavailableRuleRow";
-import { CollaboratorPanel, IdentityPicker } from "@/components/shared/CollaboratorPanel";
+import { useScheduleSolver } from "@/lib/use-schedule-solver";
+import { Metric } from "./shared/Metric";
+import { ShiftGrid } from "./shared/ShiftGrid";
+import { ShiftAssignmentPanel } from "./shared/ShiftAssignmentPanel";
+import { AssistantEditor } from "./shared/AssistantEditor";
+import {
+  IdentityPicker,
+  SyncNotice,
+  CollaborationDetails,
+} from "./shared/CollaboratorPanel";
 
 interface ScheduleProductProps {
   initialConfig: SchedulerConfig;
   initialUser: AppUser;
+  mode?: "month" | "period";
 }
+const DEFAULT_ATTEMPTS = 500;
 
-export function ScheduleProduct({ initialConfig, initialUser }: ScheduleProductProps) {
-  const [config, setConfig] = useState<SchedulerConfig>(initialConfig);
-  const [attempts, setAttempts] = useState(2500);
-  const [seed, setSeed] = useState(202606);
-  const [selectedAssistantId, setSelectedAssistantId] = useState(initialConfig.assistants[0]?.id ?? "");
+export function ScheduleProduct({
+  initialConfig,
+  initialUser,
+  mode = "month",
+}: ScheduleProductProps) {
+  const [config, setConfig] = useState(initialConfig);
+  const [startDate, setStartDate] = useState(`${initialConfig.month}-01`);
+  const [endDate, setEndDate] = useState(`${initialConfig.month}-15`);
+  const [attempts, setAttempts] = useState(DEFAULT_ATTEMPTS);
+  const [seed, setSeed] = useState(
+    Number(initialConfig.month.replace("-", "")),
+  );
+  const [selectedAssistantId, setSelectedAssistantId] = useState(
+    initialConfig.assistants[0]?.id ?? "",
+  );
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
-  const [manualAssignments, setManualAssignments] = useState<AssignmentMap | null>(null);
-  const [showGuide, setShowGuide] = useState(true);
-
+  const [manualAssignments, setManualAssignments] = useState<AssignmentMap>({});
+  const [notice, setNotice] = useState("");
+  const [editorMonth, setEditorMonth] = useState(initialConfig.month);
+  const [booted, setBooted] = useState(false);
   const { identity, setIdentity } = useIdentity();
-  const scopeKey = `month:${config.month}`;
+  const scopeKey =
+    mode === "month"
+      ? `month:${config.month}`
+      : `period:${startDate}:${endDate}`;
 
   useEffect(() => {
-    setConfig((current) => applyStoredRoster(current));
-  }, []);
-
-  // 새로고침해도 마지막으로 보던 근무월로 돌아오도록 복원한다. localStorage는
-  // 서버 렌더링 시점엔 없으므로 최초 렌더는 항상 시드 데이터의 월로 시작하고(서버와
-  // 동일해야 hydration 불일치가 없다), 마운트된 뒤 이 effect에서만 전환한다.
-  useEffect(() => {
-    const lastMonth = loadLastMonth();
-    if (!lastMonth || lastMonth === initialConfig.month) return;
-    setConfig((current) => remapConfigMonth(current, lastMonth));
-    const numericSeed = Number(lastMonth.replace("-", ""));
-    if (!Number.isNaN(numericSeed)) setSeed(numericSeed);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const storedPeriod = loadLastPeriod();
+    const month =
+      mode === "month"
+        ? (loadLastMonth() ?? initialConfig.month)
+        : (storedPeriod?.startDate.slice(0, 7) ?? initialConfig.month);
+    setConfig((current) => remapConfigMonth(applyStoredRoster(current), month));
+    setEditorMonth(month);
+    setSeed(Number(month.replace("-", "")));
+    if (mode === "period" && storedPeriod) {
+      setStartDate(storedPeriod.startDate);
+      setEndDate(storedPeriod.endDate);
+    }
+    setBooted(true);
+  }, [initialConfig.month, mode]);
 
   const roster = useRosterSync(
     config.assistants,
-    (assistants) => patchConfig((draft) => { draft.assistants = assistants; }),
-    identity
+    (assistants) => setConfig((current) => ({ ...current, assistants })),
+    identity,
   );
-  const presence = usePresence("month", scopeKey, identity);
-  const activity = useActivityFeed(20);
-  const { versions, refresh: refreshVersions } = useVersionHistory(scopeKey);
-
-  const solveResult = useMemo<SolveResult>(() => solveSchedule(config, { attempts, seed }), [config, attempts, seed]);
-  const assignments = manualAssignments ?? solveResult.assignments;
-  const summary = useMemo(() => summarize(config, assignments, solveResult.shifts), [assignments, config, solveResult.shifts]);
-  const issues = useMemo(
-    () => validate(config, assignments, solveResult.shifts, solveResult.candidates),
-    [assignments, config, solveResult.candidates, solveResult.shifts]
-  );
-
-  const selectedAssistant = config.assistants.find((assistant) => assistant.id === selectedAssistantId);
-  const selectedShift = solveResult.shifts.find((shift) => shift.id === selectedShiftId) ?? null;
-  const managerMode = canManageSchedule(initialUser.role);
-  const nightCounts = summary.assistantHours.map((assistant) => assistant.shiftTypes.night ?? 0);
-  const nightRange = nightCounts.length ? Math.max(...nightCounts) - Math.min(...nightCounts) : 0;
-
   const draftPayload: DraftPayload = {
     settings: {
       attempts,
       seed,
       fairnessToleranceHours: config.rules.fairness_tolerance_hours,
-      ignoreClassConflicts: config.rules.ignore_class_conflicts
+      ignoreClassConflicts: config.rules.ignore_class_conflicts ?? false,
     },
-    manualAssignments: manualAssignments ?? {},
-    summary: {
-      assignedShifts: summary.assignedShifts,
-      totalShifts: summary.totalShifts,
-      unassignedShifts: summary.unassignedShifts,
-      hourRange: summary.hourRange
-    }
+    manualAssignments,
+    summary: {},
   };
-
-  function applyDraftRemote(settings: Record<string, unknown>, remoteManualAssignments: AssignmentMap) {
-    const typed = settings as { attempts?: number; seed?: number; fairnessToleranceHours?: number; ignoreClassConflicts?: boolean };
-    if (typeof typed.attempts === "number") setAttempts(typed.attempts);
-    if (typeof typed.seed === "number") setSeed(typed.seed);
-    patchConfig((next) => {
-      if (typeof typed.fairnessToleranceHours === "number") next.rules.fairness_tolerance_hours = typed.fairnessToleranceHours;
-      if (typeof typed.ignoreClassConflicts === "boolean") next.rules.ignore_class_conflicts = typed.ignoreClassConflicts;
-    });
-    setManualAssignments(Object.keys(remoteManualAssignments ?? {}).length ? remoteManualAssignments : null);
+  function applyDraft(
+    settings: Record<string, unknown>,
+    assignments: AssignmentMap,
+  ) {
+    setAttempts(
+      typeof settings.attempts === "number"
+        ? Math.max(1, Math.min(10000, settings.attempts))
+        : DEFAULT_ATTEMPTS,
+    );
+    setSeed(
+      typeof settings.seed === "number"
+        ? settings.seed
+        : Number(config.month.replace("-", "")),
+    );
+    setConfig((current) => ({
+      ...current,
+      rules: {
+        ...current.rules,
+        fairness_tolerance_hours:
+          typeof settings.fairnessToleranceHours === "number"
+            ? settings.fairnessToleranceHours
+            : initialConfig.rules.fairness_tolerance_hours,
+        ignore_class_conflicts: settings.ignoreClassConflicts === true,
+      },
+    }));
+    setManualAssignments(assignments ?? {});
   }
+  const draftSync = useDraftSync(
+    scopeKey,
+    mode,
+    draftPayload,
+    applyDraft,
+    identity,
+  );
+  const { versions, refresh: refreshVersions } = useVersionHistory(scopeKey);
+  const ready = booted && roster.ready && draftSync.ready;
+  const managerMode = canManageSchedule(initialUser.role) && ready;
+  const unreviewed = config.assistants.filter(
+    (a) => a.classes_revision !== 1,
+  ).length;
+  const needsClasses = unreviewed > 0 && !config.rules.ignore_class_conflicts;
+  const solver = useScheduleSolver(
+    config,
+    attempts,
+    seed,
+    ready && !needsClasses,
+    mode === "period" ? startDate : undefined,
+    mode === "period" ? endDate : undefined,
+  );
+  const solveResult = solver.result;
+  // Persist only deliberate edits; generated previews are deterministic from the saved inputs.
+  const assignments = useMemo(
+    () => ({ ...solveResult.assignments, ...manualAssignments }),
+    [solveResult.assignments, manualAssignments],
+  );
+  const summary = useMemo(
+    () => summarize(config, assignments, solveResult.shifts),
+    [config, assignments, solveResult.shifts],
+  );
+  const issues = useMemo(
+    () =>
+      validate(config, assignments, solveResult.shifts, solveResult.candidates),
+    [config, assignments, solveResult],
+  );
+  const selectedAssistant =
+    config.assistants.find((a) => a.id === selectedAssistantId) ??
+    config.assistants[0];
+  const selectedShift =
+    solveResult.shifts.find((s) => s.id === selectedShiftId) ?? null;
+  const busy = !ready || solver.calculating;
+  const previewPending = busy || needsClasses;
+  const months = useMemo(() => {
+    const from = mode === "period" ? startDate.slice(0, 7) : config.month;
+    const to = mode === "period" ? endDate.slice(0, 7) : config.month;
+    const result: string[] = [];
+    let cursor = from;
+    while (cursor <= to && result.length < 24) {
+      result.push(cursor);
+      const year = Number(cursor.slice(0, 4)),
+        month = Number(cursor.slice(5));
+      cursor =
+        month === 12
+          ? `${year + 1}-01`
+          : `${year}-${String(month + 1).padStart(2, "0")}`;
+    }
+    return result;
+  }, [mode, config.month, startDate, endDate]);
+  const activeEditorMonth = months.includes(editorMonth)
+    ? editorMonth
+    : (months[0] ?? config.month);
 
-  const draftSync = useDraftSync(scopeKey, "month", draftPayload, applyDraftRemote, identity);
-
-  function regenerate() {
-    setManualAssignments(null);
+  function changeScope(month: string, from?: string, to?: string) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return;
+    setConfig((current) => ({
+      ...remapConfigMonth(current, month),
+      rules: { ...initialConfig.rules },
+    }));
+    setEditorMonth(month);
+    setAttempts(DEFAULT_ATTEMPTS);
+    setSeed(Number(month.replace("-", "")));
+    setManualAssignments({});
     setSelectedShiftId(null);
-    if (identity) {
-      postActivity(identity, "재생성", undefined, scopeKey);
-      createVersion(scopeKey, "month", "재생성", { ...draftPayload, manualAssignments: {} }, identity).then(refreshVersions);
+    setNotice("");
+    if (mode === "month") saveLastMonth(month);
+    else if (from && to) {
+      setStartDate(from);
+      setEndDate(to);
+      saveLastPeriod(from, to);
     }
   }
-
-  function saveVersion() {
-    if (!identity) return;
-    createVersion(scopeKey, "month", "수동 저장", draftPayload, identity).then(refreshVersions);
+  function stepMonth(offset: number) {
+    const date = new Date(
+      Number(config.month.slice(0, 4)),
+      Number(config.month.slice(5)) - 1 + offset,
+      1,
+    );
+    changeScope(
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`,
+    );
   }
-
-  function loadVersion(version: { settings: Record<string, unknown>; manual_assignments: AssignmentMap; label: string; created_by: string }) {
-    applyDraftRemote(version.settings, version.manual_assignments);
-    if (identity) postActivity(identity, "이전 버전 불러오기", `${version.label} (${version.created_by})`, scopeKey);
-  }
-
-  function patchConfig(updater: (draft: SchedulerConfig) => void) {
-    setConfig((current) => {
-      const next = structuredClone(current);
-      updater(next);
-      return next;
-    });
-    setManualAssignments(null);
-  }
-
-  function updateMonth(month: string) {
-    patchConfig((draft) => Object.assign(draft, remapConfigMonth(draft, month)));
-    const numericSeed = Number(month.replace("-", ""));
-    if (!Number.isNaN(numericSeed)) setSeed(numericSeed);
-    saveLastMonth(month);
-    if (identity) postActivity(identity, "근무월 변경", month, scopeKey);
-  }
-
-  function assignShift(assistantId: string) {
-    if (!selectedShift) return;
-    setManualAssignments((current) => ({
-      ...(current ?? solveResult.assignments),
-      [selectedShift.id]: assistantId
-    }));
-  }
-
   function exportJson() {
-    const blob = new Blob([JSON.stringify({ config, assignments }, null, 2)], { type: "application/json" });
-    download(`${config.month.replace("-", "_")}_workspace.json`, blob);
+    download(
+      `${scopeKey.replaceAll(":", "_")}.json`,
+      new Blob(
+        [JSON.stringify({ config, startDate, endDate, assignments }, null, 2)],
+        { type: "application/json" },
+      ),
+    );
   }
-
   function exportCsv() {
-    const assistants = Object.fromEntries(config.assistants.map((assistant) => [assistant.id, assistant]));
-    const rows = solveResult.shifts.map((shift) => {
-      const assistant = assistants[assignments[shift.id]];
-      return [
-        shift.date,
-        shift.dayName,
-        shift.name,
-        formatTime(shift.start),
-        formatTime(shift.end),
-        shift.creditHours,
-        assistant?.name ?? "미배정"
-      ];
-    });
-    const csv = [["date", "day", "shift", "start", "end", "credit_hours", "assistant"], ...rows]
-      .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
+    const people = new Map(config.assistants.map((a) => [a.id, a.name]));
+    const rows = [
+      ["날짜", "요일", "근무", "시작", "종료", "인정 시간", "조교"],
+      ...solveResult.shifts.map((s) => [
+        s.date,
+        s.dayName,
+        s.name,
+        formatTime(s.start),
+        formatTime(s.end),
+        s.creditHours,
+        people.get(assignments[s.id]) ?? "미배정",
+      ]),
+    ];
+    const csv = rows
+      .map((row) =>
+        row.map((v) => `"${String(v).replaceAll('"', '""')}"`).join(","),
+      )
       .join("\n");
-    download(`${config.month.replace("-", "_")}_schedule.csv`, new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
+    download(
+      `${config.month}_근무표.csv`,
+      new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }),
+    );
+  }
+  async function saveVersion() {
+    if (!identity) return;
+    const ok = await createVersion(
+      scopeKey,
+      mode,
+      "수동 저장",
+      {
+        ...draftPayload,
+        manualAssignments: assignments,
+        summary: {
+          hourRange: summary.hourRange,
+          assignedShifts: summary.assignedShifts,
+        },
+      },
+      identity,
+    );
+    setNotice(
+      ok
+        ? "현재 근무표를 버전으로 저장했습니다."
+        : "버전을 저장하지 못했습니다. 연결 상태를 확인해 주세요.",
+    );
+    if (ok) refreshVersions();
   }
 
   return (
     <main className="product-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">근무 담당자용 편성 화면</p>
-          <h1>{monthLabel(config.month)} 근무표 워크프레임</h1>
+        <div className="brandLockup">
+          <div className="brandMark" aria-hidden="true">
+            ▦
+          </div>
+          <div>
+            <p className="eyebrow">제2생활관</p>
+            <h1>조교 근무표</h1>
+          </div>
+        </div>
+        <nav className="viewNav" aria-label="편성 화면">
+          <Link aria-current={mode === "month" ? "page" : undefined} href="/">
+            월간 편성
+          </Link>
+          <Link
+            aria-current={mode === "period" ? "page" : undefined}
+            href="/period"
+          >
+            기간 편성
+          </Link>
+        </nav>
+        <IdentityPicker identity={identity} onChange={setIdentity} />
+      </header>
+      <section className="monthToolbar" aria-label="근무 기간 및 작업">
+        <div className="monthSwitcher">
+          {mode === "month" ? (
+            <>
+              <button
+                aria-label="이전 달"
+                disabled={!managerMode}
+                onClick={() => stepMonth(-1)}
+              >
+                ‹
+              </button>
+              <label>
+                <span className="srOnly">근무월</span>
+                <input
+                  type="month"
+                  value={config.month}
+                  disabled={!managerMode}
+                  onChange={(e) => changeScope(e.target.value)}
+                />
+              </label>
+              <button
+                aria-label="다음 달"
+                disabled={!managerMode}
+                onClick={() => stepMonth(1)}
+              >
+                ›
+              </button>
+            </>
+          ) : (
+            <>
+              <label>
+                <span>시작일</span>
+                <input
+                  type="date"
+                  value={startDate}
+                  max={endDate}
+                  disabled={!managerMode}
+                  onChange={(e) => {
+                    const date = e.target.value;
+                    if (
+                      date &&
+                      date <= endDate &&
+                      Number(new Date(endDate)) - Number(new Date(date)) <=
+                        366 * 86400000
+                    )
+                      changeScope(date.slice(0, 7), date, endDate);
+                  }}
+                />
+              </label>
+              <span>—</span>
+              <label>
+                <span>종료일</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  min={startDate}
+                  disabled={!managerMode}
+                  onChange={(e) => {
+                    const date = e.target.value;
+                    if (
+                      date &&
+                      date >= startDate &&
+                      Number(new Date(date)) - Number(new Date(startDate)) <=
+                        366 * 86400000
+                    )
+                      changeScope(startDate.slice(0, 7), startDate, date);
+                  }}
+                />
+              </label>
+            </>
+          )}
         </div>
         <div className="topbarControls">
-          <IdentityPicker identity={identity} onChange={setIdentity} />
-          <button type="button" onClick={() => setShowGuide((value) => !value)}>{showGuide ? "가이드 닫기" : "가이드 보기"}</button>
-          <Link className="buttonLink" href="/period">기간 편성</Link>
-          <button type="button" onClick={exportJson}>JSON</button>
-          <button type="button" onClick={exportCsv}>CSV</button>
-          <button type="button" className="primary" onClick={regenerate} disabled={!managerMode}>재생성</button>
+          <button
+            disabled={previewPending || Boolean(solver.error)}
+            onClick={exportCsv}
+          >
+            CSV 내보내기
+          </button>
+          <button
+            className="primary"
+            disabled={
+              !managerMode || previewPending || !config.assistants.length
+            }
+            onClick={() => {
+              if (
+                Object.keys(manualAssignments).length &&
+                !window.confirm("수동 배정을 해제하고 다시 자동 배정할까요?")
+              )
+                return;
+              setManualAssignments({});
+              setSeed((n) => n + 1);
+              setSelectedShiftId(null);
+            }}
+          >
+            {busy ? "준비 중…" : "다시 자동 배정"}
+          </button>
         </div>
-      </header>
-
-      {showGuide ? (
-        <section className="guideRail" aria-label="편성 가이드">
-          <GuideBubble step="1" title="달과 기준을 먼저 고르세요" body="근무월을 바꾸면 기존 불가 날짜가 같은 일자로 이동합니다." />
-          <GuideBubble step="2" title="조교별 불가 일정을 붙여넣으세요" body="예: 14-17 전체불가, 16 오픈 불가처럼 입력하고 적용합니다." />
-          <GuideBubble step="3" title="표에서 칸을 눌러 마지막 조정" body="미배정이나 특정 날짜를 선택해 가능한 조교로 직접 바꿀 수 있습니다." />
-        </section>
-      ) : null}
-
-      <section className="metrics">
-        <Metric label="배정" value={`${summary.assignedShifts}/${summary.totalShifts}`} />
-        <Metric label="시간 편차" value={`${summary.hourRange.toFixed(1)}h`} tone={summary.hourRange <= config.rules.fairness_tolerance_hours ? "ok" : "bad"} />
-        <Metric label="야간 편차" value={`${nightRange}회`} tone={nightRange <= 1 ? "ok" : "bad"} />
-        <Metric label="미배정" value={`${summary.unassignedShifts}`} tone={summary.unassignedShifts ? "bad" : "ok"} />
-        <Metric label="검증" value={issues.length ? `${issues.length}건` : "통과"} tone={issues.length ? "bad" : "ok"} />
       </section>
-
-      <section className="workspace">
+      <div className="syncStrip">
+        <SyncNotice label="조교·일정" sync={roster} />
+        <SyncNotice label="근무표" sync={draftSync} />
+        {!identity ? (
+          <span>이름을 선택하면 서버에 자동 저장됩니다.</span>
+        ) : null}
+      </div>
+      {ready && unreviewed > 0 && !config.rules.ignore_class_conflicts ? (
+        <div className="reviewBanner">
+          <strong>
+            수업 시간 확인 {config.assistants.length - unreviewed}/
+            {config.assistants.length}명
+          </strong>
+          <span>
+            각 조교의 ‘고정 수업 시간’을 입력해 주세요. 수업이 없으면 ‘수업 없음
+            확인’을 눌러 주세요. 모두 확인하면 자동 배정됩니다.
+          </span>
+        </div>
+      ) : null}
+      {notice ? (
+        <p className="inputNotice" role="status">
+          {notice}
+        </p>
+      ) : null}
+      <section className="metrics" aria-label="배정 현황" aria-busy={busy}>
+        <Metric
+          label="배정 완료"
+          value={
+            previewPending
+              ? "—"
+              : `${summary.assignedShifts} / ${summary.totalShifts}`
+          }
+        />
+        <Metric
+          label="시간 편차"
+          value={previewPending ? "—" : `${summary.hourRange.toFixed(1)}h`}
+          tone={
+            !previewPending &&
+            summary.hourRange > config.rules.fairness_tolerance_hours
+              ? "bad"
+              : "ok"
+          }
+        />
+        <Metric
+          label="미배정"
+          value={previewPending ? "—" : `${summary.unassignedShifts}칸`}
+          tone={!previewPending && summary.unassignedShifts ? "bad" : "ok"}
+        />
+        <Metric label="등록 조교" value={`${config.assistants.length}명`} />
+      </section>
+      <div className="workspace">
         <aside className="panel leftPanel">
-          <CollaboratorPanel
-            online={presence.online}
-            activity={activity}
-            rosterStatus={roster.status}
-            rosterUpdateAvailable={roster.updateAvailable}
-            onReloadRoster={roster.reloadFromServer}
-            draftStatus={draftSync.status}
-            draftUpdateAvailable={draftSync.updateAvailable}
-            onReloadDraft={draftSync.reloadFromServer}
-            draftRemoteMeta={draftSync.remoteMeta}
-            summary={summary}
-            identityMissing={!identity}
-          />
-
           <section className="panelBlock">
             <div className="blockTitle">
-              <h2>생성 조건</h2>
-            </div>
-            <div className="formGrid">
-              <label>
-                <span>근무월</span>
-                <input value={config.month} type="month" disabled={!managerMode} onChange={(event) => updateMonth(event.target.value)} />
-              </label>
-              <label>
-                <span>편차 허용</span>
-                <input value={config.rules.fairness_tolerance_hours} type="number" disabled={!managerMode} onChange={(event) => patchConfig((draft) => { draft.rules.fairness_tolerance_hours = Number(event.target.value); })} />
-              </label>
-              <label className="checkboxLabel">
-                <span>수업 제외</span>
-                <input checked={!config.rules.ignore_class_conflicts} type="checkbox" disabled={!managerMode} onChange={(event) => patchConfig((draft) => { draft.rules.ignore_class_conflicts = !event.target.checked; })} />
-              </label>
-              <label>
-                <span>시도 횟수</span>
-                <input value={attempts} type="number" disabled={!managerMode} onChange={(event) => setAttempts(Number(event.target.value))} />
-              </label>
-              <label>
-                <span>시드</span>
-                <input value={seed} type="number" disabled={!managerMode} onChange={(event) => setSeed(Number(event.target.value))} />
-              </label>
-            </div>
-          </section>
-
-          <section className="panelBlock">
-            <div className="blockTitle">
-              <h2>조교</h2>
-              {managerMode ? <button type="button" onClick={() => addAssistant(patchConfig, setSelectedAssistantId, identity)}>추가</button> : null}
+              <h2>
+                조교{" "}
+                <span className="countBadge">{config.assistants.length}</span>
+              </h2>
+              <button
+                className="subtleButton"
+                disabled={!managerMode}
+                onClick={() => {
+                  const id = `assistant_${crypto.randomUUID()}`;
+                  setConfig((c) => ({
+                    ...c,
+                    assistants: [
+                      ...c.assistants,
+                      {
+                        id,
+                        name: "새 조교",
+                        short_name: "신규",
+                        classes: {},
+                        classes_revision: 0,
+                        unavailable_rules: [],
+                      },
+                    ],
+                  }));
+                  setSelectedAssistantId(id);
+                  setSelectedShiftId(null);
+                }}
+              >
+                + 추가
+              </button>
             </div>
             <div className="assistantList">
-              {config.assistants.map((assistant) => {
-                const person = summary.assistantHours.find((item) => item.id === assistant.id);
+              {config.assistants.map((a) => {
+                const person = summary.assistantHours.find(
+                  (p) => p.id === a.id,
+                );
+                const dates = a.unavailable_rules.filter((r) =>
+                  r.date.startsWith(`${activeEditorMonth}-`),
+                ).length;
                 return (
                   <div
-                    key={assistant.id}
-                    className={assistant.id === selectedAssistantId ? "assistantItem active" : "assistantItem"}
+                    key={a.id}
+                    className={`assistantItem ${a.id === selectedAssistant?.id && !selectedShift ? "active" : ""}`}
                   >
-                    <button type="button" className="assistantItemMain" onClick={() => setSelectedAssistantId(assistant.id)}>
+                    <button
+                      className="assistantItemMain"
+                      aria-pressed={
+                        a.id === selectedAssistant?.id && !selectedShift
+                      }
+                      onClick={() => {
+                        setSelectedAssistantId(a.id);
+                        setSelectedShiftId(null);
+                      }}
+                    >
                       <span>
-                        <strong>{assistant.name}</strong>
-                        <small>{assistant.short_name} · 야간 {person?.shiftTypes.night ?? 0}회</small>
+                        <strong>{a.name || "새 조교"}</strong>
+                        <small>
+                          {a.classes_revision !== 1
+                            ? "수업 확인 필요"
+                            : `불가 ${dates}일 · 야간 ${person?.shiftTypes.night ?? 0}회`}
+                        </small>
                       </span>
-                      <b>{person?.hours.toFixed(0) ?? 0}h</b>
+                      <b>{previewPending ? "—" : `${person?.hours ?? 0}h`}</b>
                     </button>
-                    {managerMode ? (
-                      <button
-                        type="button"
-                        className="assistantItemDelete"
-                        aria-label={`${assistant.name} 삭제`}
-                        onClick={() => removeAssistant(patchConfig, assistant.id, selectedAssistantId, setSelectedAssistantId, config.assistants, identity)}
-                      >
-                        삭제
-                      </button>
-                    ) : null}
                   </div>
                 );
               })}
+              {!config.assistants.length ? (
+                <div className="emptyBox">조교를 추가해 시작하세요.</div>
+              ) : null}
             </div>
           </section>
-
-          <section className="panelBlock">
-            <div className="blockTitle">
-              <h2>버전</h2>
-              {managerMode ? <button type="button" disabled={!identity} onClick={saveVersion}>새 버전으로 저장</button> : null}
+          <details className="panelBlock settingsDetails">
+            <summary>배정 설정</summary>
+            <div className="editorStack">
+              <label>
+                <span>시간 편차 허용 (시간)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  value={config.rules.fairness_tolerance_hours}
+                  disabled={!managerMode}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      rules: {
+                        ...c.rules,
+                        fairness_tolerance_hours: Math.max(
+                          0,
+                          Number(e.target.value),
+                        ),
+                      },
+                    }))
+                  }
+                />
+              </label>
+              <label className="toggleLabel">
+                <input
+                  type="checkbox"
+                  checked={!config.rules.ignore_class_conflicts}
+                  disabled={!managerMode}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      rules: {
+                        ...c.rules,
+                        ignore_class_conflicts: !e.target.checked,
+                      },
+                    }))
+                  }
+                />
+                <span>수업 시간 반영</span>
+              </label>
+              {config.rules.ignore_class_conflicts ? (
+                <p className="mutedNote">방학 모드 · 수업 제약을 제외합니다.</p>
+              ) : null}
+              <details>
+                <summary>고급 계산 옵션</summary>
+                <div className="editorStack">
+                  <label>
+                    <span>탐색 횟수 (1~10,000)</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10000"
+                      value={attempts}
+                      disabled={!managerMode}
+                      onChange={(e) =>
+                        setAttempts(
+                          Math.min(10000, Math.max(1, Number(e.target.value))),
+                        )
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span>생성 시드</span>
+                    <input
+                      type="number"
+                      value={seed}
+                      disabled={!managerMode}
+                      onChange={(e) => setSeed(Number(e.target.value))}
+                    />
+                  </label>
+                </div>
+              </details>
             </div>
-            <div className="versionList">
-              {versions.length ? (
-                versions.map((version) => (
-                  <div key={version.id} className="versionItem">
-                    <div>
-                      <strong>{version.label}</strong>
-                      <span>{version.created_by} · {formatRelativeTime(version.created_at)}</span>
-                    </div>
-                    <button type="button" disabled={!managerMode} onClick={() => loadVersion(version)}>불러오기</button>
+          </details>
+          <details className="panelBlock">
+            <summary>
+              저장한 버전 <span className="countBadge">{versions.length}</span>
+            </summary>
+            <div className="editorStack">
+              <button
+                disabled={!identity || previewPending || Boolean(solver.error)}
+                onClick={saveVersion}
+              >
+                현재 근무표 저장
+              </button>
+              {versions.map((v) => (
+                <div key={v.id} className="versionItem">
+                  <div>
+                    <strong>{v.label}</strong>
+                    <small>
+                      {v.created_by} · {formatRelativeTime(v.created_at)}
+                    </small>
                   </div>
-                ))
-              ) : (
-                <div className="emptyBox">아직 저장된 버전이 없습니다.</div>
-              )}
+                  <button
+                    disabled={!managerMode}
+                    onClick={() => {
+                      applyDraft(v.settings, v.manual_assignments);
+                      setNotice(
+                        "저장한 배정을 불러왔습니다. 현재 일정과 충돌하는 칸은 확인이 필요합니다.",
+                      );
+                    }}
+                  >
+                    불러오기
+                  </button>
+                </div>
+              ))}
+              <button disabled={busy} onClick={exportJson}>
+                전체 데이터 내보내기
+              </button>
             </div>
-          </section>
+          </details>
+          <CollaborationDetails
+            scopeKey={scopeKey}
+            mode={mode}
+            identity={identity}
+          />
         </aside>
-
-        <section className="panel schedulePanel">
+        <section className="panel schedulePanel" aria-busy={busy}>
           <div className="scheduleHeader">
             <div>
-              <h2>{config.month} 근무표</h2>
-              <p>{issues[0] ?? "모든 하드 제약을 통과했습니다."}</p>
+              <h2>
+                {mode === "month" ? monthLabel(config.month) : "선택 기간"}{" "}
+                근무표
+              </h2>
+              <p>근무 칸을 선택하면 배정을 조정할 수 있습니다.</p>
             </div>
-            <span className={managerMode ? "rolePill manager" : "rolePill"}>담당자 모드</span>
+            <span className="rolePill">하루 1회</span>
           </div>
-          <ShiftGrid
-            shifts={solveResult.shifts}
-            assignments={assignments}
-            assistants={config.assistants}
-            selectedShiftId={selectedShiftId}
-            onSelectShift={setSelectedShiftId}
-          />
+          {busy ? (
+            <div className="loadingState" role="status">
+              <span className="loadingDot" />
+              {!ready
+                ? "저장된 일정을 불러오는 중…"
+                : "균형 있는 근무표를 계산하는 중…"}
+            </div>
+          ) : needsClasses ? (
+            <div className="setupState">
+              <strong>수업 시간 입력을 기다리고 있어요</strong>
+              <p>
+                {unreviewed}명의 수업 시간을 확인하면 균형 있는 근무표를 만들 수
+                있습니다.
+              </p>
+              <button
+                onClick={() => {
+                  setSelectedAssistantId(
+                    config.assistants.find((a) => a.classes_revision !== 1)!.id,
+                  );
+                  setSelectedShiftId(null);
+                }}
+              >
+                미확인 조교 선택
+              </button>
+            </div>
+          ) : solver.error ? (
+            <div className="emptyBox" role="alert">
+              {solver.error}
+            </div>
+          ) : (
+            <ShiftGrid
+              shifts={solveResult.shifts}
+              assignments={assignments}
+              assistants={config.assistants}
+              selectedShiftId={selectedShiftId}
+              onSelectShift={setSelectedShiftId}
+            />
+          )}
+          {!previewPending && !solver.error && issues.length ? (
+            <details className="validationDetails">
+              <summary>확인이 필요한 항목 {issues.length}건</summary>
+              <ul>
+                {issues.map((issue, i) => (
+                  <li key={i}>{issue}</li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
         </section>
-
         <aside className="panel rightPanel">
-          <AssistantEditor
-            assistant={selectedAssistant}
-            month={config.month}
-            disabled={!managerMode}
-            onChange={(assistant) => patchConfig((draft) => {
-              const index = draft.assistants.findIndex((item) => item.id === assistant.id);
-              if (index >= 0) draft.assistants[index] = assistant;
-            })}
-          />
-          <ShiftAssignmentPanel
-            title="근무 조정"
-            shift={selectedShift}
-            assistants={config.assistants}
-            assignments={assignments}
-            shifts={solveResult.shifts}
-            config={config}
-            disabled={!managerMode}
-            onAssign={assignShift}
-          />
+          {selectedShift ? (
+            <>
+              <div className="panelBlock inspectorBack">
+                <button onClick={() => setSelectedShiftId(null)}>
+                  ← 조교 일정으로
+                </button>
+              </div>
+              <ShiftAssignmentPanel
+                title="근무 배정 조정"
+                shift={selectedShift}
+                assistants={config.assistants}
+                assignments={assignments}
+                shifts={solveResult.shifts}
+                config={config}
+                disabled={!managerMode || previewPending}
+                onAssign={(id) =>
+                  setManualAssignments((current) => ({
+                    ...current,
+                    [selectedShift.id]: id,
+                  }))
+                }
+              />
+            </>
+          ) : selectedAssistant ? (
+            <>
+              {mode === "period" && months.length > 1 ? (
+                <label className="editorMonthLabel">
+                  <span>근무 불가 입력 월</span>
+                  <select
+                    value={activeEditorMonth}
+                    onChange={(e) => setEditorMonth(e.target.value)}
+                  >
+                    {months.map((month) => (
+                      <option value={month} key={month}>
+                        {monthLabel(month)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <AssistantEditor
+                key={`${selectedAssistant.id}:${activeEditorMonth}`}
+                assistant={selectedAssistant}
+                month={activeEditorMonth}
+                disabled={!managerMode}
+                onChange={(assistant) =>
+                  setConfig((c) => ({
+                    ...c,
+                    assistants: c.assistants.map((a) =>
+                      a.id === assistant.id ? assistant : a,
+                    ),
+                  }))
+                }
+              />
+              <div className="editorFooter">
+                <button
+                  className="textDanger"
+                  disabled={!managerMode}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `${selectedAssistant.name} 조교를 명단에서 삭제할까요?`,
+                      )
+                    )
+                      setConfig((c) => ({
+                        ...c,
+                        assistants: c.assistants.filter(
+                          (a) => a.id !== selectedAssistant.id,
+                        ),
+                      }));
+                  }}
+                >
+                  이 조교 삭제
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="panelBlock emptyBox">
+              왼쪽에서 조교를 추가해 주세요.
+            </div>
+          )}
         </aside>
-      </section>
+      </div>
+      <footer className="appFooter">
+        <span>월별 개인 일정 · 고정 수업 시간 · 자동 저장</span>
+        <span>
+          {!previewPending && solver.durationMs !== undefined
+            ? `계산 ${(solver.durationMs / 1000).toFixed(2)}초`
+            : ""}
+        </span>
+      </footer>
     </main>
   );
-}
-
-function GuideBubble({ step, title, body }: { step: string; title: string; body: string }) {
-  return (
-    <article className="guideBubble">
-      <b>{step}</b>
-      <div>
-        <strong>{title}</strong>
-        <p>{body}</p>
-      </div>
-    </article>
-  );
-}
-
-function AssistantEditor({
-  assistant,
-  month,
-  disabled,
-  onChange
-}: {
-  assistant?: AssistantProfile;
-  month: string;
-  disabled: boolean;
-  onChange: (assistant: AssistantProfile) => void;
-}) {
-  const [bulkText, setBulkText] = useState("");
-  const [classBulkText, setClassBulkText] = useState("");
-  const [ruleParseNotice, setRuleParseNotice] = useState(false);
-  const [classParseNotice, setClassParseNotice] = useState(false);
-  if (!assistant) return <section className="panelBlock"><div className="emptyBox">조교를 선택하세요.</div></section>;
-  const activeAssistant = assistant;
-
-  const classRows = Object.entries(activeAssistant.classes).flatMap(([day, ranges]) =>
-    (ranges ?? []).map((range, index) => ({ day, range, index }))
-  );
-
-  function updateAssistant(updater: (draft: AssistantProfile) => void) {
-    const next = structuredClone(activeAssistant);
-    updater(next);
-    onChange(next);
-  }
-
-  return (
-    <section className="panelBlock">
-      <div className="blockTitle">
-        <h2>조교 상세</h2>
-      </div>
-      <div className="editorStack">
-        <div className="formGrid">
-          <label>
-            <span>이름</span>
-            <input disabled={disabled} value={activeAssistant.name} onChange={(event) => updateAssistant((draft) => { draft.name = event.target.value; })} />
-          </label>
-          <label>
-            <span>표시명</span>
-            <input disabled={disabled} value={activeAssistant.short_name} onChange={(event) => updateAssistant((draft) => { draft.short_name = event.target.value; })} />
-          </label>
-        </div>
-        <div className="miniTitle">
-          <h3>수업 시간</h3>
-          <button type="button" disabled={disabled} onClick={() => updateAssistant((draft) => {
-            draft.classes.mon ??= [];
-            draft.classes.mon.push(["09:00", "09:50"]);
-          })}>추가</button>
-        </div>
-        <div className="miniRows">
-          {classRows.map((row) => (
-            <div key={`${row.day}-${row.index}`} className="miniRow">
-              <select disabled={disabled} value={row.day} onChange={(event) => updateAssistant((draft) => moveClass(draft, row.day, row.index, event.target.value))}>
-                {Object.entries(dayLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-              </select>
-              <input disabled={disabled} type="time" value={row.range[0]} onChange={(event) => updateAssistant((draft) => { draft.classes[row.day as keyof typeof draft.classes]![row.index][0] = event.target.value; })} />
-              <input disabled={disabled} type="time" value={row.range[1]} onChange={(event) => updateAssistant((draft) => { draft.classes[row.day as keyof typeof draft.classes]![row.index][1] = event.target.value; })} />
-              <button type="button" disabled={disabled} aria-label="수업 시간 삭제" onClick={() => updateAssistant((draft) => {
-                draft.classes[row.day as keyof typeof draft.classes]!.splice(row.index, 1);
-              })}>삭제</button>
-            </div>
-          ))}
-        </div>
-        <div className="quickInput">
-          <textarea
-            disabled={disabled}
-            value={classBulkText}
-            placeholder={"개강 후 새 시간표를 붙여넣으면 기존 수업 시간을 모두 교체합니다.\n월 09:00-10:15, 11:00-11:50\n화 13:00-14:15\n수 09:00-09:50"}
-            onChange={(event) => {
-              setClassBulkText(event.target.value);
-              setClassParseNotice(false);
-            }}
-          />
-          <button
-            type="button"
-            disabled={disabled || !classBulkText.trim()}
-            onClick={() => {
-              const classes = parseBulkClasses(classBulkText);
-              if (!Object.keys(classes).length) {
-                setClassParseNotice(true);
-                return;
-              }
-              updateAssistant((draft) => {
-                draft.classes = classes;
-              });
-              setClassBulkText("");
-              setClassParseNotice(false);
-            }}
-          >
-            시간표 붙여넣기 (기존 시간표 교체)
-          </button>
-          {classParseNotice ? <small className="parseNotice">요일과 시간을 인식하지 못했습니다. &quot;월 09:00-10:00&quot; 형식으로 입력해 주세요.</small> : null}
-        </div>
-        <div className="miniTitle">
-          <h3>근무 제한</h3>
-          <button type="button" disabled={disabled} onClick={() => updateAssistant((draft) => {
-            draft.unavailable_rules ??= [];
-            draft.unavailable_rules.push({ date: `${month}-01`, mode: "all", reason: "" });
-          })}>추가</button>
-        </div>
-        <div className="quickInput">
-          <textarea
-            disabled={disabled}
-            value={bulkText}
-            placeholder={"14-17 전체불가\n16 오픈 불가\n20 야간 불가"}
-            onChange={(event) => {
-              setBulkText(event.target.value);
-              setRuleParseNotice(false);
-            }}
-          />
-          <button
-            type="button"
-            disabled={disabled || !bulkText.trim()}
-            onClick={() => {
-              const rules = parseBulkUnavailable(bulkText, month);
-              if (!rules.length) {
-                setRuleParseNotice(true);
-                return;
-              }
-              updateAssistant((draft) => {
-                draft.unavailable_rules = [...(draft.unavailable_rules ?? []), ...rules];
-              });
-              setBulkText("");
-              setRuleParseNotice(false);
-            }}
-          >
-            빠른 입력 적용
-          </button>
-          {ruleParseNotice ? <small className="parseNotice">날짜를 인식하지 못했습니다. &quot;14-17 전체불가&quot;처럼 날짜를 포함해 입력해 주세요.</small> : null}
-        </div>
-        <div className="ruleRows">
-          {(activeAssistant.unavailable_rules ?? []).map((rule, index) => (
-            <UnavailableRuleRow
-              key={`${rule.date}-${index}`}
-              rule={rule}
-              disabled={disabled}
-              onChange={(next) => updateAssistant((draft) => {
-                draft.unavailable_rules[index] = next;
-              })}
-              onDelete={() => updateAssistant((draft) => {
-                draft.unavailable_rules.splice(index, 1);
-              })}
-            />
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function addAssistant(
-  patchConfig: (updater: (draft: SchedulerConfig) => void) => void,
-  setSelectedAssistantId: (id: string) => void,
-  identity: Identity | null
-) {
-  const id = `assistant_${Date.now()}`;
-  patchConfig((draft) => {
-    draft.assistants.push({
-      id,
-      name: "새 조교",
-      short_name: "신규",
-      classes: {},
-      unavailable_rules: []
-    });
-  });
-  setSelectedAssistantId(id);
-  if (identity) postActivity(identity, "조교 추가");
-}
-
-function removeAssistant(
-  patchConfig: (updater: (draft: SchedulerConfig) => void) => void,
-  id: string,
-  selectedAssistantId: string,
-  setSelectedAssistantId: (id: string) => void,
-  assistants: AssistantProfile[],
-  identity: Identity | null
-) {
-  const assistant = assistants.find((item) => item.id === id);
-  if (!assistant) return;
-  if (!window.confirm(`${assistant.name} 조교를 삭제할까요?`)) return;
-  patchConfig((draft) => {
-    draft.assistants = draft.assistants.filter((item) => item.id !== id);
-  });
-  if (selectedAssistantId === id) {
-    const next = assistants.find((item) => item.id !== id);
-    setSelectedAssistantId(next?.id ?? "");
-  }
-  if (identity) postActivity(identity, "조교 삭제", assistant.name);
-}
-
-function moveClass(assistant: AssistantProfile, oldDay: string, index: number, newDay: string) {
-  const oldRanges = assistant.classes[oldDay as keyof typeof assistant.classes] ?? [];
-  const [range] = oldRanges.splice(index, 1);
-  assistant.classes[newDay as keyof typeof assistant.classes] ??= [];
-  assistant.classes[newDay as keyof typeof assistant.classes]!.push(range);
 }

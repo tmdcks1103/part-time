@@ -15,6 +15,10 @@ create table if not exists roster_assistants (
   updated_at timestamptz not null default now()
 );
 
+-- classes stores {version: 1, confirmed: boolean, days: {...}}.
+-- Legacy day maps are presented as unconfirmed empty schedules for re-entry.
+-- Their original JSON is retained in classes.previous on the first update.
+
 alter table roster_assistants enable row level security;
 
 create table if not exists schedule_drafts (
@@ -31,8 +35,7 @@ alter table schedule_drafts enable row level security;
 
 -- schedule_drafts holds only the single latest live state per scope (continuously
 -- autosaved, like roster_assistants). schedule_versions is the append-only history on
--- top of that: a new row per meaningful checkpoint (explicit save, a regenerate click,
--- or a throttled periodic snapshot while someone is actively editing), so the "버전"
+-- top of that: a new row per explicit "현재 근무표 저장" checkpoint, so the "버전"
 -- list can show real history and let people load an earlier version back.
 create table if not exists schedule_versions (
   id bigint generated always as identity primary key,

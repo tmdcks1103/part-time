@@ -38,6 +38,8 @@ export interface AssistantProfile {
   name: string;
   short_name: string;
   classes: Partial<Record<DayKey, [string, string][]>>;
+  /** 0: reset / awaiting entry; 1: reviewed (including explicitly no classes). */
+  classes_revision?: number;
   unavailable_rules: AvailabilityRule[];
 }
 

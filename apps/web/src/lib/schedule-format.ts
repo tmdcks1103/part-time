@@ -12,7 +12,7 @@ export const dayLabels: Record<string, string> = {
   tue: "화",
   wed: "수",
   thu: "목",
-  fri: "금"
+  fri: "금", sat: "토", sun: "일"
 };
 
 const dayTokens: Record<string, string> = {
@@ -37,12 +37,6 @@ export function remapConfigMonth(config: SchedulerConfig, month: string): Schedu
   const next = structuredClone(config);
   next.month = month;
   next.title = `${monthLabel(month)} 조교 근무표`;
-  next.assistants.forEach((assistant) => {
-    assistant.unavailable_rules = (assistant.unavailable_rules ?? []).map((rule) => ({
-      ...rule,
-      date: remapDateToMonth(rule.date, month)
-    }));
-  });
   return next;
 }
 
@@ -55,16 +49,16 @@ export function isoDate(month: string, day: number) {
 
 export function ruleKind(rule: AvailabilityRule) {
   if (rule.mode === "all") return "all";
-  const blocked = rule.unavailable_shifts?.[0];
-  return blocked ? `block:${blocked}` : "all";
+  if (rule.only_shifts) return `only:${rule.only_shifts.join(",")}`;
+  return rule.unavailable_shifts?.length ? `block:${rule.unavailable_shifts.join(",")}` : "all";
 }
 
 export function buildRuleFromKind(rule: AvailabilityRule, kind: string): AvailabilityRule {
   if (kind === "all") {
     return { date: rule.date, mode: "all", reason: rule.reason };
   }
-  const key = kind.replace("block:", "") as ShiftKey;
-  return { date: rule.date, unavailable_shifts: [key], reason: rule.reason };
+  const [mode, keys] = kind.split(":");
+  return { date: rule.date, [mode === "only" ? "only_shifts" : "unavailable_shifts"]: keys.split(",") as ShiftKey[], reason: rule.reason };
 }
 
 export function countUnavailableInRange(assistant: AssistantProfile, startDate: string, endDate: string) {
@@ -93,7 +87,9 @@ function parseUnavailableLine(line: string, month: string): AvailabilityRule[] {
   return dates.map((date) =>
     isAllDay
       ? { date, mode: "all", reason }
-      : { date, unavailable_shifts: unavailableShifts, reason }
+      : trimmed.includes("만 가능")
+        ? { date, only_shifts: unavailableShifts, reason }
+        : { date, unavailable_shifts: unavailableShifts, reason }
   );
 }
 
@@ -104,12 +100,16 @@ function expandDates(text: string, month: string) {
   let sanitized = text;
 
   for (const match of text.matchAll(isoPattern)) {
-    const date = isoDate(month, Number(match[1]));
+    const date = match[0].startsWith(`${month}-`) ? isoDate(month, Number(match[1])) : null;
     if (date) dates.add(date);
     sanitized = sanitized.replace(match[0], " ");
   }
 
   for (const match of sanitized.matchAll(rangePattern)) {
+    if ((match[1] && Number(match[1]) !== Number(month.slice(5))) || (match[3] && Number(match[3]) !== Number(month.slice(5)))) {
+      sanitized = sanitized.replace(match[0], " ");
+      continue;
+    }
     const startDay = Number(match[2]);
     const endDay = Number(match[4]);
     const [from, to] = startDay <= endDay ? [startDay, endDay] : [endDay, startDay];
@@ -122,6 +122,7 @@ function expandDates(text: string, month: string) {
 
   const singlePattern = /(?:(\d{1,2})[/.])?(\d{1,2})(?!\s*[:시])/g;
   for (const match of sanitized.matchAll(singlePattern)) {
+    if (match[1] && Number(match[1]) !== Number(month.slice(5))) continue;
     const day = Number(match[2]);
     const date = isoDate(month, day);
     if (date) dates.add(date);
@@ -144,8 +145,11 @@ export function parseBulkClasses(text: string): AssistantProfile["classes"] {
     const day = dayTokens[dayMatch] as keyof typeof classes;
 
     for (const match of line.matchAll(timePattern)) {
+      const start = normalizeTime(match[1]);
+      const end = normalizeTime(match[2]);
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(start) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(end) || start >= end) continue;
       classes[day] ??= [];
-      classes[day]!.push([normalizeTime(match[1]), normalizeTime(match[2])]);
+      classes[day]!.push([start, end]);
     }
   }
 

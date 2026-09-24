@@ -12,7 +12,7 @@ import type {
   SolveResult
 } from "./types";
 
-export * from "./types";
+export type * from "./types";
 
 export const UNASSIGNED_ID = "__unassigned__";
 export const DAY_KEYS: DayKey[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -66,7 +66,6 @@ export function buildShifts(config: SchedulerConfig): ShiftInstance[] {
 }
 
 export function classConflict(assistant: AssistantProfile, shift: ShiftInstance): boolean {
-  if (shift.dayIndex >= 5) return false;
   const classes = assistant.classes?.[DAY_KEYS[shift.dayIndex]] ?? [];
   return classes.some(([start, end]) => overlaps(shift.start, shift.end, parseTime(start), parseTime(end)));
 }
@@ -76,6 +75,7 @@ function shouldIgnoreClassConflicts(config?: SchedulerConfig): boolean {
 }
 
 export function blockedReason(assistant: AssistantProfile, shift: ShiftInstance, config?: SchedulerConfig): string {
+  if (!shouldIgnoreClassConflicts(config) && assistant.classes_revision === 0) return "수업 시간 확인 필요";
   for (const rule of assistant.unavailable_rules ?? []) {
     if (rule.date !== shift.date) continue;
     if (rule.mode === "all") return rule.reason ?? "근무 불가";
@@ -158,7 +158,8 @@ export function summarize(config: SchedulerConfig, assignments: AssignmentMap, s
   const raw = summarizeRaw(config, assignments, shifts);
   const values = Object.values(raw.hours);
   const requiredCreditHours = shifts.reduce((sum, shift) => sum + shift.creditHours, 0);
-  const assignedShifts = Object.values(assignments).filter((assistantId) => assistantId !== UNASSIGNED_ID).length;
+  const assistantIds = new Set(config.assistants.map((assistant) => assistant.id));
+  const assignedShifts = shifts.filter((shift) => assistantIds.has(assignments[shift.id])).length;
   const assistants = Object.fromEntries(config.assistants.map((assistant) => [assistant.id, assistant]));
   const assistantHours = Object.entries(raw.hours)
     .map(([assistantId, hours]) => ({
@@ -199,6 +200,7 @@ function objective(config: SchedulerConfig, assignments: AssignmentMap, shifts: 
   });
 
   return [
+    summary.unassignedShifts,
     ...windowScores,
     summary.hourRange,
     standardDeviation(values),
@@ -216,7 +218,7 @@ function compareObjective(left: number[], right: number[] | null): number {
   return 0;
 }
 
-function greedyOnce(config: SchedulerConfig, shifts: ShiftInstance[], candidates: CandidateMap, seed: number): AssignmentMap | null {
+function greedyOnce(config: SchedulerConfig, shifts: ShiftInstance[], candidates: CandidateMap, seed: number): AssignmentMap {
   const random = seededRandom(seed);
   const assistantIds = config.assistants.map((assistant) => assistant.id);
   const assignableShifts = shifts.filter((shift) => candidates[shift.id]?.length);
@@ -246,7 +248,7 @@ function greedyOnce(config: SchedulerConfig, shifts: ShiftInstance[], candidates
 
   for (const shift of assignmentOrder) {
     const possible = candidates[shift.id].filter((assistantId) => !daysWorked[assistantId].has(shift.date));
-    if (!possible.length) return null;
+    if (!possible.length) continue;
 
     const selected = possible.reduce<{ id: string; score: number } | null>((best, assistantId) => {
       const projected = hours[assistantId] + shift.creditHours;
@@ -266,7 +268,7 @@ function greedyOnce(config: SchedulerConfig, shifts: ShiftInstance[], candidates
       return !best || score < best.score ? { id: assistantId, score } : best;
     }, null)?.id;
 
-    if (!selected) return null;
+    if (!selected) continue;
     assignments[shift.id] = selected;
     hours[selected] += shift.creditHours;
     for (const window of windows) {
@@ -293,7 +295,7 @@ export function validate(config: SchedulerConfig, assignments: AssignmentMap, sh
   for (const shift of shifts) {
     const assistantId = assignments[shift.id];
     if (!assistantId || assistantId === UNASSIGNED_ID) {
-      issues.push(`${shift.date} ${shift.name}: 배정 가능한 조교 없음`);
+      issues.push(`${shift.date} ${shift.name}: ${candidates[shift.id]?.length ? "미배정 · 수동 조정 가능" : "배정 가능한 조교 없음"}`);
       continue;
     }
     if (!candidates[shift.id]?.includes(assistantId)) {
@@ -361,9 +363,11 @@ function solveShifts(config: SchedulerConfig, shifts: ShiftInstance[], attempts:
   let best: AssignmentMap | null = null;
   let bestObjective: number[] | null = null;
 
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  const hasCandidates = shifts.some((shift) => candidates[shift.id]?.length);
+  const safeAttempts = !hasCandidates ? 0 : Number.isFinite(attempts) ? Math.max(1, Math.min(10000, Math.floor(attempts))) : 500;
+  seed = Number.isFinite(seed) ? seed : 202606;
+  for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
     const assignments = greedyOnce(config, shifts, candidates, seed + attempt * 9973);
-    if (!assignments) continue;
     const currentObjective = objective(config, assignments, shifts);
     if (compareObjective(currentObjective, bestObjective) < 0) {
       best = assignments;
@@ -373,7 +377,7 @@ function solveShifts(config: SchedulerConfig, shifts: ShiftInstance[], attempts:
 
   const assignments =
     best ??
-    Object.fromEntries(shifts.map((shift) => [shift.id, candidates[shift.id]?.[0] ?? UNASSIGNED_ID]));
+    Object.fromEntries(shifts.map((shift) => [shift.id, UNASSIGNED_ID]));
 
   const summary = summarize(config, assignments, shifts);
   const issues = validate(config, assignments, shifts, candidates);

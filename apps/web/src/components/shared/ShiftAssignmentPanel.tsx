@@ -1,5 +1,6 @@
 import {
   blockedReason,
+  hasAssignmentConflict,
   formatTime,
   UNASSIGNED_ID,
   type AssignmentMap,
@@ -42,7 +43,7 @@ export function ShiftAssignmentPanel({
         </button>
         {assistants.map((assistant) => {
           const reason = blockedReason(assistant, shift, config);
-          const sameDay = shifts.some((other) => other.id !== shift.id && other.date === shift.date && assignments[other.id] === assistant.id);
+          const sameDay = hasAssignmentConflict(assistant.id, shift, assignments, shifts);
           const blocked = Boolean(reason || sameDay);
           return (
             <button
@@ -53,7 +54,7 @@ export function ShiftAssignmentPanel({
               onClick={() => onAssign(assistant.id)}
             >
               <span>{assistant.name}</span>
-              <small>{blocked ? reason || "같은 날 배정" : "가능"}</small>
+              <small>{blocked ? reason || "평일 오픈·미들·마감 중복 불가" : "가능"}</small>
             </button>
           );
         })}

@@ -656,7 +656,7 @@ export function ScheduleProduct({
               </h2>
               <p>근무 칸을 선택하면 배정을 조정할 수 있습니다.</p>
             </div>
-            <span className="rolePill">하루 1회</span>
+            <span className="rolePill">평일 주간 1회 · 야간·주말 중복 가능</span>
           </div>
           {busy ? (
             <div className="loadingState" role="status">

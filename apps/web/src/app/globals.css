@@ -453,6 +453,7 @@ details[open] > summary {
   background: #f0f2fa;
 }
 .scheduleHeader {
+  flex-wrap: wrap;
   padding: 19px 20px;
   border-bottom: 1px solid var(--line);
 }

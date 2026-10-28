@@ -375,5 +375,72 @@ console.log(
   "PASS: an intentionally empty server roster does not restore seed assistants",
 );
 await emptyContext.close();
+
+// The manual picker must enforce the same repeat rules as the worker.
+roster = [
+  { ...structuredClone(fixture[0]), classes: {}, unavailable_rules: [] },
+];
+revision++;
+drafts.clear();
+const repeatContext = await browser.newContext({
+  viewport: { width: 390, height: 844 },
+});
+await repeatContext.route("**/api/**", intercept);
+const repeatPage = await repeatContext.newPage();
+repeatPage.on("pageerror", (error) => errors.push(error.message));
+await repeatPage.goto(url);
+await repeatPage.waitForSelector(".shiftCard");
+await repeatPage.getByLabel("편집자").selectOption("근무표 담당자");
+assert.ok(
+  await repeatPage.evaluate(
+    () => document.documentElement.scrollWidth <= innerWidth,
+  ),
+);
+const selectShift = async (date, name) =>
+  repeatPage
+    .getByRole("button", { name: new RegExp(`^${date} ${name} ·`) })
+    .click();
+const candidate = repeatPage
+  .locator(".shiftInspector")
+  .getByRole("button", { name: new RegExp(roster[0].name) });
+await selectShift("2026-06-01", "야간");
+assert.equal(await candidate.isEnabled(), true);
+await repeatPage.getByRole("button", { name: "미배정", exact: true }).click();
+assert.equal(await candidate.isEnabled(), true);
+await candidate.click();
+const assignedDay = repeatPage
+  .locator(".scheduleTable tbody tr")
+  .first()
+  .locator(".shiftCard:not(.unassigned)")
+  .first();
+await assignedDay.click();
+await repeatPage.getByRole("button", { name: "미배정", exact: true }).click();
+await selectShift("2026-06-01", "미들");
+assert.equal(
+  await candidate.isEnabled(),
+  true,
+  "night must not block a weekday day shift",
+);
+await candidate.click();
+await selectShift("2026-06-01", "마감");
+assert.equal(
+  await candidate.isDisabled(),
+  true,
+  "weekday middle must block close",
+);
+assert.ok(
+  (await candidate.innerText()).includes("평일 오픈·미들·마감 중복 불가"),
+);
+for (const date of ["2026-06-06", "2026-06-07"]) {
+  for (const name of ["오픈", "미들", "마감"]) {
+    await selectShift(date, name);
+    assert.equal(await candidate.isEnabled(), true);
+    await candidate.click();
+  }
+}
+console.log(
+  "PASS: manual assignment allows nights and weekends, but blocks repeated weekday day shifts",
+);
+await repeatContext.close();
 assert.deepEqual(errors, []);
 await browser.close();

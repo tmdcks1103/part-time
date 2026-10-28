@@ -52,6 +52,7 @@ export interface SchedulerConfig {
     fairness_tolerance_hours: number;
     ignore_class_conflicts?: boolean;
     fairness_windows?: FairnessWindow[];
+    /** Legacy input retained for compatibility; weekday day shifts are limited to one, nights/weekends may repeat. */
     max_shifts_per_day: number;
     shift_templates: Record<DayKind, ShiftTemplate[]>;
   };

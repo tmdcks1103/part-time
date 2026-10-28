@@ -99,6 +99,24 @@ export function buildCandidates(config: SchedulerConfig, shifts: ShiftInstance[]
   );
 }
 
+// Only weekday open/middle/close compete for a person's daily assignment.
+// Night shifts and weekend shifts may be combined with other shifts that day.
+function isWeekdayDayShift(shift: ShiftInstance): boolean {
+  return shift.dayKind === "weekday" && ["open", "middle", "close"].includes(shift.key);
+}
+
+export function hasAssignmentConflict(
+  assistantId: string,
+  shift: ShiftInstance,
+  assignments: AssignmentMap,
+  shifts: ShiftInstance[],
+): boolean {
+  return isWeekdayDayShift(shift) && shifts.some((other) =>
+    other.id !== shift.id && other.date === shift.date &&
+    isWeekdayDayShift(other) && assignments[other.id] === assistantId
+  );
+}
+
 function seededRandom(seed: number): () => number {
   let value = seed % 2147483647;
   if (value <= 0) value += 2147483646;
@@ -243,11 +261,13 @@ function greedyOnce(config: SchedulerConfig, shifts: ShiftInstance[], candidates
   const counts = Object.fromEntries(assistantIds.map((id) => [id, 0]));
   const weekends = Object.fromEntries(assistantIds.map((id) => [id, 0]));
   const shiftTypeCounts = Object.fromEntries(assistantIds.map((id) => [id, {} as Record<string, number>]));
-  const daysWorked = Object.fromEntries(assistantIds.map((id) => [id, new Set<string>()]));
+  const weekdayDaysWorked = Object.fromEntries(assistantIds.map((id) => [id, new Set<string>()]));
   const assignments: AssignmentMap = {};
 
   for (const shift of assignmentOrder) {
-    const possible = candidates[shift.id].filter((assistantId) => !daysWorked[assistantId].has(shift.date));
+    const possible = candidates[shift.id].filter((assistantId) =>
+      !isWeekdayDayShift(shift) || !weekdayDaysWorked[assistantId].has(shift.date)
+    );
     if (!possible.length) continue;
 
     const selected = possible.reduce<{ id: string; score: number } | null>((best, assistantId) => {
@@ -279,7 +299,7 @@ function greedyOnce(config: SchedulerConfig, shifts: ShiftInstance[], candidates
     counts[selected] += 1;
     weekends[selected] += shift.dayKind === "weekend" ? 1 : 0;
     shiftTypeCounts[selected][shift.key] = (shiftTypeCounts[selected][shift.key] ?? 0) + 1;
-    daysWorked[selected].add(shift.date);
+    if (isWeekdayDayShift(shift)) weekdayDaysWorked[selected].add(shift.date);
   }
 
   for (const shift of shifts) {
@@ -301,12 +321,14 @@ export function validate(config: SchedulerConfig, assignments: AssignmentMap, sh
     if (!candidates[shift.id]?.includes(assistantId)) {
       issues.push(`${shift.date} ${shift.name}: 배정 조건 위반`);
     }
-    const dayKey = `${shift.date}:${assistantId}`;
-    perDay[dayKey] = (perDay[dayKey] ?? 0) + 1;
+    if (isWeekdayDayShift(shift)) {
+      const dayKey = `${shift.date}:${assistantId}`;
+      perDay[dayKey] = (perDay[dayKey] ?? 0) + 1;
+    }
   }
 
   for (const [key, count] of Object.entries(perDay)) {
-    if (count > 1) issues.push(`${key.split(":")[0]}: 하루 ${count}회 배정`);
+    if (count > 1) issues.push(`${key.split(":")[0]}: 평일 오픈·미들·마감 중복 배정 (${count}회)`);
   }
 
   const summary = summarize(config, assignments, shifts);
